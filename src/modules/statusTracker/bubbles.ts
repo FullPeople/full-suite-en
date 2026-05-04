@@ -720,17 +720,42 @@ export async function findTokenAt(x: number, y: number): Promise<Image | null> {
   return null;
 }
 
+/** True if the given item's metadata has ANY key in the status-
+ *  tracker plugin namespace. Broader than the original
+ *  `OWNER_KEY === string` test — catches items written by older
+ *  versions of this module that may have used different key
+ *  schemes (e.g. role/buff-id keys without an owner-key, or stray
+ *  partial writes). Used by sweep so a migration from any prior
+ *  layout (rectangles, curved bands, attached labels …) cleans
+ *  fully on first run. */
+function hasPluginMetadata(item: Item): boolean {
+  const m = item.metadata;
+  if (!m || typeof m !== "object") return false;
+  const prefix = `${PLUGIN_ID}/`;
+  for (const k of Object.keys(m)) {
+    if (k.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 /** Wipe EVERY item this module has ever created, anywhere in the
  * scene. Touches BOTH scene.items (bubble bg + text — shared across
  * clients, or hidden-token bubbles routed to scene.local) and
  * scene.local (particles + hidden-token bubbles). Particle module's
  * in-memory state is also reset so its tick loop forgets stale
- * particle IDs. */
+ * particle IDs.
+ *
+ * 2026-05-05: broadened the filter from `OWNER_KEY===string` to
+ * "any plugin-namespaced metadata key" to catch leftover items
+ * from the legacy EN rectangle-based renderer (init commit; same
+ * PLUGIN_ID, same OWNER_KEY scheme — but a defensive belt-and-
+ * braces filter is safer when migrating across major refactors).
+ * The user reported seeing a "far-away right-angle rectangle"
+ * alongside the new curved band; that's exactly what the legacy
+ * `buildShape().shapeType("RECTANGLE")` items rendered as. */
 export async function sweepAllOurItems(): Promise<void> {
   try {
-    const ours = await OBR.scene.items.getItems((it) =>
-      typeof it.metadata?.[OWNER_KEY] === "string",
-    );
+    const ours = await OBR.scene.items.getItems(hasPluginMetadata);
     if (ours.length > 0) {
       await OBR.scene.items.deleteItems(ours.map((it) => it.id));
     }
@@ -738,9 +763,7 @@ export async function sweepAllOurItems(): Promise<void> {
     logErr("sweepAllOurItems(scene.items) failed", e);
   }
   try {
-    const localOurs = await OBR.scene.local.getItems((it) =>
-      typeof it.metadata?.[OWNER_KEY] === "string",
-    );
+    const localOurs = await OBR.scene.local.getItems(hasPluginMetadata);
     if (localOurs.length > 0) {
       await OBR.scene.local.deleteItems(localOurs.map((it) => it.id));
     }

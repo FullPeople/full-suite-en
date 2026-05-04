@@ -669,12 +669,18 @@ export async function setupStatusTracker(): Promise<void> {
     } catch {}
   }));
   const onSceneReady = async (): Promise<void> => {
+    // Sweep first — clears any items left by the legacy renderer
+    // (rectangles + labels) before we start drawing the new curved
+    // bands. Awaited so syncAllVisibleTokens can't race it.
     await sweepAllOurItems();
     lastBuffSnapshot.clear();
     void syncAllVisibleTokens();
   };
+  // Await the first run so setup() doesn't return before the
+  // legacy-item migration completes. Subsequent scene-ready events
+  // can fire-and-forget.
   if (await OBR.scene.isReady()) {
-    void onSceneReady();
+    await onSceneReady();
   }
   unsubs.push(
     OBR.scene.onReadyChange((ready) => {
