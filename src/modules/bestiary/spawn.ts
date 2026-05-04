@@ -1,6 +1,7 @@
 import OBR, { buildImage } from "@owlbear-rodeo/sdk";
 import { ParsedMonster } from "./types";
 import { getRawMonster, makeSlug } from "./data";
+import { assetUrl } from "../../asset-base";
 
 // The bestiary panel iframe doesn't run startSceneSync(), so calling
 // getState() from src/state.ts here would return only DEFAULT_STATE.
@@ -76,7 +77,7 @@ function getImageSize(url: string): Promise<{ w: number; h: number }> {
 
 /** Same as getImageSize but also reports whether the image actually
  *  loaded. Lets spawnMonster fall back to a placeholder when a
- *  homebrew monster has no token (the auto-built kiwee URL 404s). */
+ *  homebrew monster's tokenUrl 404s. */
 function probeImage(url: string): Promise<{ ok: boolean; w: number; h: number }> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -86,7 +87,10 @@ function probeImage(url: string): Promise<{ ok: boolean; w: number; h: number }>
   });
 }
 
-const FALLBACK_TOKEN_URL = `https://obr.dnd.center/5etools-img/bestiary/tokens/MM/Commoner.webp`;
+// Default placeholder shipped with the plugin: a question-mark slate
+// token. Used when a monster's tokenUrl is empty / 404s. EN build
+// no longer falls back to any external 5etools-style image host.
+const FALLBACK_TOKEN_URL = assetUrl("default-token.svg");
 
 export async function spawnMonster(
   monster: ParsedMonster,
@@ -96,10 +100,10 @@ export async function spawnMonster(
    *  jitter" behaviour for the click-to-spawn path. */
   position?: { x: number; y: number },
 ) {
-  // Probe the chosen tokenUrl up-front. If it 404s (typical for
-  // homebrew monsters whose auto-built kiwee URL doesn't exist),
-  // fall back to the Commoner placeholder so the token still spawns
-  // — DM can swap in a real image later via OBR's image picker.
+  // Probe the chosen tokenUrl up-front. If it 404s (homebrew
+  // entries that omit `tokenHref`), fall back to the bundled
+  // question-mark placeholder so the token still spawns — DM
+  // can swap in a real image post-spawn via OBR's image picker.
   let tokenUrl = monster.tokenUrl || FALLBACK_TOKEN_URL;
   if (tokenUrl !== FALLBACK_TOKEN_URL) {
     const probe = await probeImage(tokenUrl);

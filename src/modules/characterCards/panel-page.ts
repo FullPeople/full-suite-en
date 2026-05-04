@@ -72,18 +72,23 @@ interface ResourceDef {
   url: string;
 }
 
-// Only 不全书 remains. Previously also had 5etool (5e.kiwee.top) pages —
-// they shared a single renderer process whose V8 heap blew past the ~4GB
-// ceiling and crashed the tab. Removed. 不全书 is a lighter site and safe
-// to keep resident for all players.
-const RESOURCES: ResourceDef[] = [
-  { slug: "bqs", label: "不全书", icon: ICONS.book, url: "https://5echm.kagangtuya.top/" },
-];
+// EN build: removed 不全书 (Chinese-only homebrew site) — wasn't useful
+// for the English audience and the empty resource column took screen
+// real estate that the card preview could reclaim. The RESOURCES
+// array stays here so adding back any English resource later is a
+// one-line change. The resource column itself (`.res-col`) stays
+// hidden via `style="display:none"` in cc-panel.html so an empty
+// array doesn't render an empty box.
+const RESOURCES: ResourceDef[] = [];
 
 type View =
   | { type: "empty" }
   | { type: "card"; id: string }
-  | { type: "resource"; slug: string };
+  | { type: "resource"; slug: string }
+  /** EN build: read-only example card preview shown inline in the
+   *  panel viewer. Loads the example JSON via `?example=1` so the
+   *  fullscreen page renders with import disabled. */
+  | { type: "example" };
 
 let roomId = "";
 let playerName = "anonymous";
@@ -411,12 +416,31 @@ function ensureCardIframe(card: CardEntry): HTMLIFrameElement {
   return f;
 }
 
+// EN build: example-card iframe. Read-only preview rendered inline
+// in the panel viewer (NOT as a fullscreen modal — see the example
+// button handler in OBR.onReady below). Single instance, lazily
+// constructed on first click; subsequent example clicks reuse the
+// same iframe.
+let exampleIframe: HTMLIFrameElement | null = null;
+function ensureExampleIframe(): HTMLIFrameElement {
+  if (exampleIframe && document.body.contains(exampleIframe)) return exampleIframe;
+  const f = document.createElement("iframe");
+  f.src = `${assetUrl("cc-fullscreen.html")}?example=1`;
+  f.setAttribute("scrolling", "yes");
+  f.dataset.kind = "example";
+  f.style.display = "none";
+  viewer.appendChild(f);
+  exampleIframe = f;
+  return f;
+}
+
 // Single-live-iframe policy for external resources.
-// All 5e.kiwee.top iframes share one Chrome renderer process and a single
-// V8 heap (~4GB ceiling). Keeping 6 heavy reference pages resident easily
-// crashes that process. We only keep ONE resource iframe alive at a time —
-// switching tabs unloads the previous one. Angular state loss on switch is
-// an acceptable trade-off vs. crashing the whole app.
+// External reference iframes (when present) share one Chrome
+// renderer process and a single V8 heap (~4GB ceiling). Keeping
+// many heavy SPAs resident easily crashes that process. We keep
+// ONE resource iframe alive at a time — switching tabs unloads
+// the previous one. State loss on switch is an acceptable trade-
+// off vs. crashing the tab. (EN build ships RESOURCES = [].)
 function ensureResourceIframe(def: ResourceDef): HTMLIFrameElement {
   // Unload every other resource iframe.
   for (const [slug, f] of resourceIframes) {
@@ -538,6 +562,8 @@ function render() {
   } else if (curView.type === "resource") {
     const def = RESOURCES.find((r) => r.slug === curView.slug);
     if (def) ensureResourceIframe(def);
+  } else if (curView.type === "example") {
+    ensureExampleIframe();
   }
 
   // Hide every iframe except the active one
@@ -545,6 +571,7 @@ function render() {
     let show = false;
     if (curView.type === "card" && f.dataset.kind === "card" && f.dataset.id === curView.id) show = true;
     if (curView.type === "resource" && f.dataset.kind === "resource" && f.dataset.slug === curView.slug) show = true;
+    if (curView.type === "example" && f.dataset.kind === "example") show = true;
     f.style.display = show ? "block" : "none";
   });
 
@@ -567,7 +594,10 @@ function buildResourceColumn() {
     btn.addEventListener("click", () => selectResource(r.slug));
     resCol.appendChild(btn);
   }
-  resCol.style.display = "flex";
+  // Hide the column entirely when there's nothing to show — keeps
+  // the layout clean for the EN build (which currently has no
+  // resources).
+  resCol.style.display = RESOURCES.length > 0 ? "flex" : "none";
 }
 
 function timeAgo(isoZ: string): string {
@@ -656,7 +686,12 @@ OBR.onReady(async () => {
     sideEl.classList.remove("drag-over");
     const f = e.dataTransfer?.files?.[0] ?? null;
     if (!f) return;
-    if (!f.name.toLowerCase().endsWith(".xlsx")) {
+    // EN build only accepts .json (legacy .xlsx upload path was
+    // removed since the EN audience doesn't have the Chinese-only
+    // 悲灵 xlsx template). The file picker (`pickXlsxFile`) already
+    // sets `.json` as its accept hint; the drag-drop check is the
+    // last guard before we POST to the server.
+    if (!f.name.toLowerCase().endsWith(".json")) {
       showError(tt("ccPanelOnlyXlsx"));
       return;
     }
@@ -691,26 +726,18 @@ OBR.onReady(async () => {
   // Close via X button in the sidebar header, Esc, or clicking backdrop.
   closeBtn?.addEventListener("click", minimize);
 
-  // Read-only example card preview. Opens the cc-fullscreen iframe
-  // in OBR.modal mode with `?example=1`; the fullscreen page detects
-  // that flag and fetches the static example-character-card.json
-  // shipped in /full-suite-en/ instead of the server endpoint.
-  // Import button hidden inside the example view so users can't
-  // mutate or upload it; Export JSON still works → players who want
-  // to use it as a starting point click Export, edit the downloaded
-  // file, then load it via the regular import flow on a new card.
-  document.getElementById("exampleBtn")?.addEventListener("click", async () => {
-    try {
-      const url = `${assetUrl("cc-fullscreen.html")}?example=1`;
-      await OBR.modal.open({
-        id: "com.full-suite-en/cc-example",
-        url,
-        fullScreen: true,
-        hidePaper: true,
-      });
-    } catch (e) {
-      console.error("[cc-panel] open example failed", e);
-    }
+  // Read-only example card preview. EN spec change 2026-05-04: instead
+  // of opening as a fullscreen modal (which felt heavy for a "what
+  // does a card look like?" preview), the example renders inline in
+  // the panel's left viewer pane via a `type:"example"` view kind.
+  // The cc-fullscreen iframe still uses `?example=1` so its own
+  // read-only mode kicks in (Import button hidden, Export still
+  // works → users wanting to fork it click Export, edit, re-import
+  // as their own card via the regular drag-drop / file-picker flow).
+  document.getElementById("exampleBtn")?.addEventListener("click", () => {
+    current = { type: "example" };
+    saveState();
+    render();
   });
 
   // About handler removed — centralized in suite About panel.

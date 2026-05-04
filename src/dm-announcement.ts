@@ -212,10 +212,12 @@ function renderSection(s: Section): string {
 // read the English log even on a Chinese client, or vice-versa.
 const LS_ANNOUNCE_LANG = "full-suite-en/announce-lang";
 function readAnnounceLang(): "zh" | "en" {
+  // EN variant: default to English. The user can still flip to 中文
+  // via the CN | EN toggle in the announcement header.
   try {
     const v = localStorage.getItem(LS_ANNOUNCE_LANG);
-    return v === "en" ? "en" : "zh";
-  } catch { return "zh"; }
+    return v === "zh" ? "zh" : "en";
+  } catch { return "en"; }
 }
 function writeAnnounceLang(v: "zh" | "en") {
   try { localStorage.setItem(LS_ANNOUNCE_LANG, v); } catch {}
@@ -268,7 +270,17 @@ async function loadAndRender(): Promise<void> {
   cachedSections = parseAnnouncement(md);
   const lang = readAnnounceLang();
   applyLangButtons(lang);
+  applyChromeForLang(lang);
   rerenderForLang(lang);
+}
+
+/** Localise the bits of the modal chrome that aren't part of the
+ *  rendered markdown: the loading hint (replaced by content after
+ *  fetch) and the close button at the foot. Called whenever the
+ *  CN|EN toggle changes. */
+function applyChromeForLang(lang: "zh" | "en"): void {
+  const closeBtn = document.getElementById("btn-close");
+  if (closeBtn) closeBtn.textContent = lang === "zh" ? "我知道了" : "Got it";
 }
 
 OBR.onReady(() => {
@@ -282,11 +294,13 @@ OBR.onReady(() => {
   document.getElementById("ann-lang-zh")?.addEventListener("click", () => {
     writeAnnounceLang("zh");
     applyLangButtons("zh");
+    applyChromeForLang("zh");
     rerenderForLang("zh");
   });
   document.getElementById("ann-lang-en")?.addEventListener("click", () => {
     writeAnnounceLang("en");
     applyLangButtons("en");
+    applyChromeForLang("en");
     rerenderForLang("en");
   });
   window.addEventListener("keydown", async (e) => {

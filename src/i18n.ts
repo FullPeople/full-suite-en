@@ -308,8 +308,8 @@ const TR: Dict = {
   ccPanelRefreshed: { zh: "已刷新", en: "Refreshed" },
   ccPanelRefreshFailed: { zh: "刷新失败", en: "Refresh failed" },
   ccPanelEmpty3: {
-    zh: "还没有角色卡\n拖拽 xlsx 到左侧上传",
-    en: "No character cards yet.\nDrag xlsx to the panel to upload.",
+    zh: "还没有角色卡\n拖拽 .json 到面板上传",
+    en: "No character cards yet.\nDrag a .json file onto the panel to upload.",
   },
   ccPanelNoCards: { zh: "暂无角色卡", en: "No character cards" },
   ccPanelRefreshTitle: { zh: "从新的 .json 重新加载", en: "Reload from a fresh .json file" },

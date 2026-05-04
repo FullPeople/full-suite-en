@@ -153,7 +153,7 @@ function App() {
   const [filtered, setFiltered] = useState<ParsedMonster[]>([]);
   const [query, setQuery] = useState(() => readLS("query", ""));
   const [sortDesc, setSortDesc] = useState(() => readLS("sortDesc", "0") === "1");
-  // Source-code filter (e.g. "PHB", "MYHB", "kiwee"). Free-text;
+  // Source-code filter (e.g. "PHB", "MYHB", or a homebrew tag). Free-text;
   // case-insensitive substring match on each monster's `source`.
   // Persisted per-client so a homebrew GM doesn't re-type their tag
   // every panel reopen.
@@ -208,9 +208,9 @@ function App() {
 
     // Pull suite state (scene metadata → suite cache) BEFORE
     // loadAllMonsters so getEnabledLibraryBases() inside data.ts
-    // sees the user's custom library list. Without this prime the
-    // panel iframe reads DEFAULT_STATE (just kiwee) and homebrew
-    // monsters from URL libraries silently disappear.
+    // sees the user's configured library list. Without this prime
+    // the panel iframe reads DEFAULT_STATE (which has no libraries
+    // in the EN build) and every monster silently disappears.
     startSceneSync();
     refreshFromScene()
       .catch(() => undefined)

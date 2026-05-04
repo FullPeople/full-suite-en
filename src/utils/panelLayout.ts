@@ -33,6 +33,11 @@ export const PANEL_IDS = {
   ccInfo: "cc-info",
   search: "search",
   portalEdit: "portal-edit",
+  /** Standalone HP / Temp / AC bar that auto-pops on selection of a
+   *  lightweight token (no bestiary slug, no character-card binding,
+   *  but with the per-token `hp-bar-enabled` flag set via the
+   *  right-click menu). */
+  hpBar: "hp-bar",
 } as const;
 
 export type PanelId = (typeof PANEL_IDS)[keyof typeof PANEL_IDS];

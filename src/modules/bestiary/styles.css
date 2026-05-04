@@ -144,7 +144,7 @@ body {
 
 /* Source-code filter — inline mini-input next to the auto-init
    toggle. Mostly for GMs who want to narrow the bestiary to their
-   own homebrew library tag (e.g. "kiwee", "PHB"). Persists per-
+   own homebrew library tag (e.g. "PHB", "MYHB"). Persists per-
    client via localStorage. */
 .source-filter-wrap {
   margin-left: auto;

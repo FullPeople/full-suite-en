@@ -26,23 +26,40 @@ import {
 
 const POPOVER_ID = "com.full-suite-en/search-bar";
 
-// Data source — kiwee.top works for both languages, but additional
-// libraries can be wired in via the suite's library list (set in
-// Settings → 库设置). When >1 library is enabled, loadIndex fetches
-// from every one and merges entries — that way a self-hosted
-// Cloudflare lib's homebrew monsters show up in search alongside
-// the kiwee defaults.
-const DEFAULT_BASE = "https://5e.kiwee.top";
+// EN build ships with NO bundled libraries. Helpers return empty
+// arrays when nothing is configured; the rest of the search code
+// short-circuits gracefully on that. Users add libraries via
+// Settings → Libraries; multiple libraries are merged + deduped at
+// load time, so a self-hosted homebrew + an SRD mirror can co-exist
+// in one search-bar without duplicate entries.
 
 function getEnabledLibraryBases(): string[] {
   try {
     const libs = getState().libraries || [];
-    const bases = libs
+    return libs
       .filter((l) => l.enabled && typeof l.baseUrl === "string" && l.baseUrl.trim().length > 0)
       .map((l) => l.baseUrl.replace(/\/+$/, ""));
-    return bases.length > 0 ? bases : [DEFAULT_BASE];
   } catch {
-    return [DEFAULT_BASE];
+    return [];
+  }
+}
+
+/** Like getEnabledLibraryBases but also returns each library's
+ *  configured `indexPath` (defaults to `search/index.json` when
+ *  unset). */
+function getEnabledLibrarySources(): Array<{ base: string; indexPath: string }> {
+  try {
+    const libs = getState().libraries || [];
+    return libs
+      .filter((l) => l.enabled && typeof l.baseUrl === "string" && l.baseUrl.trim().length > 0)
+      .map((l) => ({
+        base: l.baseUrl.replace(/\/+$/, ""),
+        indexPath: typeof l.indexPath === "string" && l.indexPath.length > 0
+          ? l.indexPath.replace(/^\/+/, "")
+          : "search/index.json",
+      }));
+  } catch {
+    return [];
   }
 }
 
@@ -60,8 +77,11 @@ const BAR_W_OPEN = 720;
 const BAR_H_IDLE = 40;
 const BAR_H_OPEN = 440;
 
-const CACHE_KEY = "full-suite-en/search-index-v1";
-const BOOKS_CACHE_KEY = "full-suite-en/search-books-v1";
+// v2 (2026-05-04): bumped to force re-fetch after dedup logic
+// changes. Old v1 caches under `full-suite-en/search-index-v1*`
+// are stale and ignored.
+const CACHE_KEY = "full-suite-en/search-index-v2";
+const BOOKS_CACHE_KEY = "full-suite-en/search-books-v2";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RESULTS = 50;
 
@@ -208,8 +228,10 @@ async function loadIndex(): Promise<IndexFile> {
     // Cache key is keyed on the active library set + local-content
     // signature so switching libraries OR adding/removing local
     // imports both invalidate the cached merged index.
-    const bases = getEnabledLibraryBases();
-    const cacheKey = `${CACHE_KEY}:${bases.join("|")}:${getLocalContentSignature()}`;
+    const sources = getEnabledLibrarySources();
+    // Cache key encodes both base AND indexPath so toggling between
+    // index.json and index-partnered.json invalidates the cache.
+    const cacheKey = `${CACHE_KEY}:${sources.map((s) => `${s.base}|${s.indexPath}`).join("||")}:${getLocalContentSignature()}`;
     try {
       const raw = localStorage.getItem(cacheKey);
       if (raw) {
@@ -224,13 +246,13 @@ async function loadIndex(): Promise<IndexFile> {
     // Fetch all libraries in parallel; merge `x` (entries) by
     // (cn / n / source) and the source map `m.s` by code.
     const perLibrary = await Promise.all(
-      bases.map(async (base) => {
+      sources.map(async ({ base, indexPath }) => {
         try {
-          const res = await fetch(`${base}/search/index.json`, { cache: "no-cache" });
+          const res = await fetch(`${base}/${indexPath}`, { cache: "no-cache" });
           if (!res.ok) return null;
           return (await res.json()) as IndexFile;
         } catch (e) {
-          console.warn(`[obr-suite/search] index fetch failed for ${base}`, e);
+          console.warn(`[obr-suite/search] index fetch failed for ${base}/${indexPath}`, e);
           return null;
         }
       })
@@ -255,10 +277,25 @@ async function loadIndex(): Promise<IndexFile> {
         }
       }
     }
+    // Resolve each entry's source to its canonical CODE STRING
+    // per-library so the dedupe survives id-number disagreements
+    // across libraries (e.g. kiwee main + kiwee partnered).
+    const resolveSourceCode = (e: Entry, lib: IndexFile): string => {
+      if (e.s == null) return "";
+      if (typeof e.s === "string") return e.s.toLowerCase();
+      const map = lib.m?.s || {};
+      for (const [code, id] of Object.entries(map)) {
+        if (id === e.s) return code.toLowerCase();
+      }
+      return String(e.s).toLowerCase();
+    };
     const seen = new Set<string>();
     for (const lib of allValid) {
       for (const e of lib.x) {
-        const key = `${e.cn || ""}|${e.n || ""}|${e.s ?? ""}|${e.c ?? ""}`;
+        const cn = (e.cn || "").trim().toLowerCase();
+        const n = (e.n || "").trim().toLowerCase();
+        const src = resolveSourceCode(e, lib);
+        const key = `${cn}|${n}|${src}|${e.c ?? ""}`;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.x.push(e);
@@ -688,32 +725,45 @@ async function findEntryData(entry: Entry): Promise<DataEntry | null> {
   const parsed = isClassFamily ? parseClassFamilyEntry(entry) : null;
   const matchAny = (pool: DataEntry[]): DataEntry | null => {
     if (parsed) {
-      // Match strategy for class/feature/subclass/subclassFeature:
-      //   1. (preferred) ENG_name + source + className all match
-      //   2. ENG_name + className match (any source)
-      //   3. ENG_name match alone
-      //   4. CN name match
+      // Looser fallback chain so homebrew packs (where ENG_name is
+      // often missing or set to a Chinese string) still resolve
+      // content. The key insight is featureEng frequently equals
+      // featureCn for homebrew — the index regex extracts whatever's
+      // in `n` regardless of script.
       const targetEng = parsed.featureEng?.toLowerCase();
       const targetCn = parsed.featureCn;
       const targetClass = parsed.classCn;
       const lvl = parsed.level;
       const matchByLevel = (e: any) =>
         lvl == null || e.level == null || e.level === lvl;
+      const matchByClass = (e: any) =>
+        targetClass ? (e.className === targetClass) : true;
+      const nameMatches = (e: any, target: string | null | undefined): boolean => {
+        if (!target) return false;
+        const t = target.toLowerCase();
+        const eng = (e.ENG_name || "").toLowerCase();
+        const nm = (e.name || "").toLowerCase();
+        return eng === t || nm === t;
+      };
       return (
         pool.find((e: any) =>
-          targetEng && e.ENG_name?.toLowerCase() === targetEng &&
+          nameMatches(e, targetEng) &&
           e.source?.toUpperCase() === targetSrc &&
-          (targetClass ? e.className === targetClass : true) &&
+          matchByClass(e) &&
           matchByLevel(e),
         ) ??
         pool.find((e: any) =>
-          targetEng && e.ENG_name?.toLowerCase() === targetEng &&
-          (targetClass ? e.className === targetClass : true) &&
+          nameMatches(e, targetEng) &&
+          matchByClass(e) &&
           matchByLevel(e),
         ) ??
         pool.find((e: any) =>
-          targetEng && e.ENG_name?.toLowerCase() === targetEng,
+          nameMatches(e, targetCn) &&
+          matchByClass(e) &&
+          matchByLevel(e),
         ) ??
+        pool.find((e: any) => nameMatches(e, targetEng)) ??
+        pool.find((e: any) => nameMatches(e, targetCn)) ??
         pool.find((e: any) => targetCn && e.name === targetCn) ??
         null
       );
@@ -1304,8 +1354,8 @@ function applyLangPlaceholder() {
   const lang = getLocalLang();
   inputEl.placeholder =
     lang === "zh"
-      ? "搜索 5etools…（怪物/法术/物品/职业/种族…）"
-      : "Search 5etools… (monsters/spells/items/classes/races…)";
+      ? "搜索…（怪物 / 法术 / 物品 / 职业 / 种族 …）"
+      : "Search… (monsters / spells / items / classes / races …)";
 }
 
 // --- Resize ---
