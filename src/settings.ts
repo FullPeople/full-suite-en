@@ -1941,8 +1941,8 @@ const TABS: TabDef[] = [
   },
   {
     id: "vision",
-    zh: `${ICONS.eye} 视野迷雾`,
-    en: `${ICONS.eye} Vision / Fog`,
+    zh: `${ICONS.eye} 视野迷雾 <span class="tab-beta">调试中</span>`,
+    en: `${ICONS.eye} Vision / Fog <span class="tab-beta">BETA</span>`,
     moduleId: "vision",
     body: {
       zh: `<p><b>动态视野系统</b>。给 token 挂上「光源」，光会被墙壁阻挡，墙之外是黑色迷雾，每个客户端单独渲染（玩家只看自己 token 的视野，DM 看全部）。</p>

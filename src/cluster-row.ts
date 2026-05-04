@@ -51,6 +51,38 @@ let cachedAnnounceVersion: string | null = null;
 
 let timeStopActive = false;
 let isGM = false;
+// EN-variant gating: hide the auto-popup toggles when there's nothing
+// they could control. `hasBestiaryContent` flips ON once the user
+// configures at least one library OR imports a local-content file;
+// `hasCharacterCards` flips ON once at least one card exists in the
+// scene metadata. Both default false so a totally fresh install hides
+// the buttons rather than confusing the user with toggles for empty
+// data sets. Recomputed on every state / scene-metadata change.
+let hasBestiaryContent = false;
+let hasCharacterCards = false;
+const CC_LIST_KEY = "com.character-cards/list";
+
+function recomputeBestiaryContent(): boolean {
+  try {
+    const s = getState();
+    const enabledLibs = (s.libraries ?? []).filter((l) => l.enabled).length;
+    if (enabledLibs > 0) return true;
+    // Local content count — same module the bestiary uses for gating.
+    // Lazy-import to avoid pulling localContent into the cluster-row's
+    // bundle if it ends up unused.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { getLocalFiles } = require("./utils/localContent");
+    return Array.isArray(getLocalFiles()) && getLocalFiles().length > 0;
+  } catch { return false; }
+}
+
+async function recomputeCharacterCardsCount(): Promise<boolean> {
+  try {
+    const meta = await OBR.scene.getMetadata();
+    const list = (meta as any)[CC_LIST_KEY];
+    return Array.isArray(list) && list.length > 0;
+  } catch { return false; }
+}
 
 function isAutoPopupOn(key: string): boolean {
   return readLS(key, "1") !== "0";
@@ -145,7 +177,9 @@ function renderRow() {
   // Bestiary popup toggle — visible to ALL roles now (was GM-only).
   // Players can also see the monster info popover when they own a
   // bestiary-bound token, so they need their own auto-popup control.
-  if (s.enabled.bestiary) {
+  // EN variant: also gate on actual content presence — a popup
+  // toggle for an empty bestiary / cards list is just dead UI.
+  if (s.enabled.bestiary && hasBestiaryContent) {
     popupBtns.push(
       btnHTML({
         id: "btnBestiaryPopup",
@@ -156,7 +190,7 @@ function renderRow() {
       })
     );
   }
-  if (s.enabled.characterCards) {
+  if (s.enabled.characterCards && hasCharacterCards) {
     popupBtns.push(
       btnHTML({
         id: "btnCharCardPopup",
@@ -375,17 +409,38 @@ OBR.onReady(async () => {
   });
 
   startSceneSync();
-  onStateChange(() => renderRow());
+  onStateChange(() => {
+    hasBestiaryContent = recomputeBestiaryContent();
+    renderRow();
+  });
   onLangChange(() => renderRow());
 
   OBR.scene.onMetadataChange(() => {
-    refreshFromScene().then(() => renderRow());
+    refreshFromScene().then(async () => {
+      hasBestiaryContent = recomputeBestiaryContent();
+      hasCharacterCards = await recomputeCharacterCardsCount();
+      renderRow();
+    });
   });
   OBR.broadcast.onMessage("com.full-suite-en/state-changed", () => {
-    refreshFromScene().then(() => renderRow());
+    refreshFromScene().then(async () => {
+      hasBestiaryContent = recomputeBestiaryContent();
+      hasCharacterCards = await recomputeCharacterCardsCount();
+      renderRow();
+    });
+  });
+  // Local-content imports / removals fire this broadcast on every
+  // client. We re-check bestiary content on it so adding the FIRST
+  // local file flips the popup-toggle on without a scene-metadata
+  // round-trip.
+  OBR.broadcast.onMessage("com.full-suite-en/local-content-changed", () => {
+    hasBestiaryContent = recomputeBestiaryContent();
+    renderRow();
   });
 
   await refreshFromScene();
+  hasBestiaryContent = recomputeBestiaryContent();
+  hasCharacterCards = await recomputeCharacterCardsCount();
   renderRow();
 
   // Drag-handle for the row itself. Positioned at the start/end of

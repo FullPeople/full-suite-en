@@ -1,0 +1,135 @@
+{
+  "schema_version": "0.3",
+  "meta": {
+    "exported_at": 0,
+    "exporter": "full-suite-en/example",
+    "notes": "Sample character card. Drop this file into the suite's character-cards panel (drag onto the right rail or click the upload button) to load it. Edit the fields to match your own character — every key is optional."
+  },
+  "identity": {
+    "display_name": "Aelar Galanodel",
+    "character_name": "Aelar Galanodel",
+    "alignment": "Chaotic Good",
+    "race": { "name": "Elf", "subrace": "High Elf" },
+    "background": "Sage",
+    "faith": "Corellon Larethian"
+  },
+  "classes": [
+    { "name": "Wizard", "subclass": "School of Evocation", "level": 5 }
+  ],
+  "total_level": 5,
+  "abilities": {
+    "str": { "score": 10, "mod": 0, "save_proficient": false, "save_bonus": 0 },
+    "dex": { "score": 16, "mod": 3, "save_proficient": false, "save_bonus": 3 },
+    "con": { "score": 14, "mod": 2, "save_proficient": false, "save_bonus": 2 },
+    "int": { "score": 18, "mod": 4, "save_proficient": true,  "save_bonus": 7 },
+    "wis": { "score": 12, "mod": 1, "save_proficient": true,  "save_bonus": 4 },
+    "cha": { "score": 10, "mod": 0, "save_proficient": false, "save_bonus": 0 }
+  },
+  "core_stats": {
+    "size": "Medium",
+    "speed": { "walk": 30 },
+    "proficiency_bonus": 3,
+    "ac": { "value": 13, "from": "natural" },
+    "initiative": 3,
+    "passive_perception": 13,
+    "hp": { "current": 32, "max": 32, "temp": 0 },
+    "hit_dice": { "current": 5, "max": 5, "die": "d6" },
+    "death_saves": { "successes": 0, "failures": 0 }
+  },
+  "defenses": {
+    "resistances": [],
+    "immunities": [],
+    "vulnerabilities": [],
+    "condition_immunities": []
+  },
+  "skills": [
+    { "name": "Arcana",        "ability": "int", "proficient": true,  "expertise": false, "bonus": 7 },
+    { "name": "History",       "ability": "int", "proficient": true,  "expertise": false, "bonus": 7 },
+    { "name": "Investigation", "ability": "int", "proficient": false, "expertise": false, "bonus": 4 },
+    { "name": "Perception",    "ability": "wis", "proficient": true,  "expertise": false, "bonus": 4 },
+    { "name": "Insight",       "ability": "wis", "proficient": false, "expertise": false, "bonus": 1 }
+  ],
+  "combat": {
+    "weapons": [
+      {
+        "name": "Quarterstaff",
+        "type": "melee",
+        "attack_bonus": 3,
+        "reach": "5 ft.",
+        "damage": [
+          { "dice": "1d6+0", "type": "bludgeoning", "label": "one-handed" },
+          { "dice": "1d8+0", "type": "bludgeoning", "label": "two-handed" }
+        ],
+        "properties": ["versatile"],
+        "notes": ""
+      },
+      {
+        "name": "Light Crossbow",
+        "type": "ranged",
+        "attack_bonus": 6,
+        "range": "80/320 ft.",
+        "damage": [
+          { "dice": "1d8+3", "type": "piercing" }
+        ],
+        "properties": ["ammunition", "loading", "two-handed"]
+      }
+    ],
+    "actions": [],
+    "reactions": []
+  },
+  "spellcasting": {
+    "ability": "int",
+    "save_dc": 15,
+    "attack_bonus": 7,
+    "slots": {
+      "1": { "current": 4, "max": 4 },
+      "2": { "current": 3, "max": 3 },
+      "3": { "current": 2, "max": 2 }
+    },
+    "spells_known": [
+      { "level": 0, "name": "Fire Bolt",      "school": "evocation",  "prepared": true },
+      { "level": 0, "name": "Mage Hand",      "school": "conjuration", "prepared": true },
+      { "level": 0, "name": "Prestidigitation","school": "transmutation","prepared": true },
+      { "level": 1, "name": "Magic Missile",  "school": "evocation",  "prepared": true },
+      { "level": 1, "name": "Shield",         "school": "abjuration", "prepared": true },
+      { "level": 1, "name": "Detect Magic",   "school": "divination", "prepared": false },
+      { "level": 2, "name": "Misty Step",     "school": "conjuration","prepared": true },
+      { "level": 2, "name": "Scorching Ray",  "school": "evocation",  "prepared": true },
+      { "level": 3, "name": "Fireball",       "school": "evocation",  "prepared": true },
+      { "level": 3, "name": "Counterspell",   "school": "abjuration", "prepared": true }
+    ]
+  },
+  "features": {
+    "racial": [
+      { "name": "Darkvision",      "source": "Elf",      "entries": ["You can see in dim light within 60 feet of you as if it were bright light."] },
+      { "name": "Fey Ancestry",    "source": "Elf",      "entries": ["You have advantage on saving throws against being charmed, and magic can't put you to sleep."] },
+      { "name": "Cantrip",         "source": "High Elf", "entries": ["You know one extra cantrip from the wizard spell list."] }
+    ],
+    "class": [
+      { "name": "Arcane Recovery", "source": "Wizard",   "entries": ["Once per day on a short rest, you can recover up to 3 levels of expended spell slots (no slot above 5th)."] },
+      { "name": "Sculpt Spells",   "source": "Evocation","entries": ["When you cast an evocation spell that affects others you can see, you can shield up to 1 + the spell's level allies; they automatically succeed on the save and take no damage."] }
+    ],
+    "feats": []
+  },
+  "background": {
+    "name": "Sage",
+    "feature": { "name": "Researcher", "entries": ["When you attempt to learn or recall a piece of lore, if you do not know it you often know where to find it."] },
+    "personality_traits": ["I'm convinced that everyone else is just less learned than I am."],
+    "ideals": ["Knowledge — the path to power and self-improvement is through knowledge."],
+    "bonds": ["I work to preserve a library, college, scriptorium, or monastery."],
+    "flaws": ["I'll go to any length to learn the answer to a question that puzzles me."]
+  },
+  "inventory": {
+    "currency": { "cp": 0, "sp": 0, "ep": 0, "gp": 25, "pp": 0 },
+    "items": [
+      { "name": "Spellbook",      "quantity": 1, "weight": 3, "notes": "Contains all known spells" },
+      { "name": "Component pouch","quantity": 1, "weight": 2 },
+      { "name": "Scholar's pack", "quantity": 1, "weight": 11, "notes": "Backpack, ink, pen, sand, parchment, small knife, book of lore" },
+      { "name": "Bottle of ink",  "quantity": 2, "weight": 0 },
+      { "name": "Letter from a dead colleague posing a question", "quantity": 1, "weight": 0 }
+    ]
+  },
+  "exports": {
+    "tags": ["wizard", "elf", "5e2014"]
+  }
+}
