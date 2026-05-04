@@ -181,6 +181,12 @@ export async function setupHpBar(): Promise<void> {
     return { left, top, width: POPOVER_W, height: POPOVER_H };
   });
 
+  // Right-click context menu — supports BOTH single-select and
+  // bulk multi-select (2026-05-05 spec change). "Add" requires every
+  // selected token to be HP-bar-eligible AND at least one to lack
+  // the flag. "Remove" requires at least one to have the flag.
+  // Adding skips already-flagged tokens; removing skips unflagged
+  // ones — the union/intersection semantics the user asked for.
   try {
     await OBR.contextMenu.create({
       id: CTX_ADD,
@@ -193,17 +199,20 @@ export async function setupHpBar(): Promise<void> {
               { key: "type", value: "IMAGE" },
               { key: ["metadata", BESTIARY_SLUG_KEY], value: undefined },
               { key: ["metadata", CC_BIND_KEY], value: undefined },
+            ],
+            some: [
               { key: ["metadata", HP_BAR_FLAG_KEY], value: undefined },
             ],
-            max: 1,
           },
         },
       ],
       onClick: async (ctx) => {
-        const id = ctx.items[0]?.id;
-        if (!id) return;
+        const ids = ctx.items
+          .filter((it) => !(it.metadata as any)?.[HP_BAR_FLAG_KEY])
+          .map((i) => i.id);
+        if (ids.length === 0) return;
         try {
-          await OBR.scene.items.updateItems([id], (drafts) => {
+          await OBR.scene.items.updateItems(ids, (drafts) => {
             for (const d of drafts) {
               (d.metadata as any)[HP_BAR_FLAG_KEY] = true;
             }
@@ -226,22 +235,27 @@ export async function setupHpBar(): Promise<void> {
           filter: {
             every: [
               { key: "type", value: "IMAGE" },
+            ],
+            some: [
               { key: ["metadata", HP_BAR_FLAG_KEY], operator: "!=", value: undefined },
             ],
-            max: 1,
           },
         },
       ],
       onClick: async (ctx) => {
-        const id = ctx.items[0]?.id;
-        if (!id) return;
+        const ids = ctx.items
+          .filter((it) => (it.metadata as any)?.[HP_BAR_FLAG_KEY] != null)
+          .map((i) => i.id);
+        if (ids.length === 0) return;
         try {
-          await OBR.scene.items.updateItems([id], (drafts) => {
+          await OBR.scene.items.updateItems(ids, (drafts) => {
             for (const d of drafts) {
               delete (d.metadata as any)[HP_BAR_FLAG_KEY];
             }
           });
-          if (popoverOpen && currentItemId === id) await closePopover();
+          if (popoverOpen && currentItemId && ids.includes(currentItemId)) {
+            await closePopover();
+          }
         } catch (e) {
           console.error("[hp-bar] remove failed", e);
         }

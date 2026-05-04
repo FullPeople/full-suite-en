@@ -64,9 +64,27 @@ interface CatalogFile {
 
 const UNCATEGORIZED = "Uncategorized";
 
+// Per-client persistence of the active category filter. Stored under
+// localStorage so picking "Buffs" remains selected across palette
+// open/close + scene reloads.
+const LS_ACTIVE_FILTER = "com.full-suite-en/status/active-filter";
+function readPersistedFilter(): string | null {
+  try {
+    const v = localStorage.getItem(LS_ACTIVE_FILTER);
+    if (typeof v === "string" && v.length > 0) return v;
+  } catch {}
+  return null;
+}
+function writePersistedFilter(v: string | null): void {
+  try {
+    if (v == null || v === "") localStorage.removeItem(LS_ACTIVE_FILTER);
+    else localStorage.setItem(LS_ACTIVE_FILTER, v);
+  } catch {}
+}
+
 let buffs: BuffDef[] = DEFAULT_BUFFS.slice();
 let groupOrder: string[] = [];
-let activeFilter: string | null = null;
+let activeFilter: string | null = readPersistedFilter();
 let editMode = false;
 
 // Inline "+ category" input is open when this is true. Replaces the
@@ -225,9 +243,10 @@ function renderFilters(): void {
     const g = b.dataset.g || "";
 
     if (!editMode) {
-      // Apply mode: click filters
+      // Apply mode: click filters (persisted per-client).
       b.addEventListener("click", () => {
         activeFilter = g === "" ? null : g;
+        writePersistedFilter(activeFilter);
         render();
       });
       return;
@@ -235,7 +254,11 @@ function renderFilters(): void {
 
     // Edit mode: empty data-g shouldn't appear, but guard anyway.
     if (g === "") {
-      b.addEventListener("click", () => { activeFilter = null; render(); });
+      b.addEventListener("click", () => {
+        activeFilter = null;
+        writePersistedFilter(null);
+        render();
+      });
       return;
     }
 

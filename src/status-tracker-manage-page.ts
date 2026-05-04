@@ -23,6 +23,7 @@ import {
   PLUGIN_ID,
   STATUS_BUFFS_KEY,
   SCENE_BUFF_CATALOG_KEY,
+  DEFAULT_BUFFS,
   BuffDef,
   textColorFor,
 } from "./modules/statusTracker/types";
@@ -58,7 +59,7 @@ async function loadCatalog(): Promise<void> {
       arr = (v as any).buffs;
     }
     if (arr) {
-      catalog = arr
+      const parsed = arr
         .filter((e) => e && typeof e.id === "string")
         .map((e) => ({
           id: e.id,
@@ -66,11 +67,19 @@ async function loadCatalog(): Promise<void> {
           color: typeof e.color === "string" ? e.color : "#ffffff",
           group: typeof e.group === "string" && e.group.length > 0 ? e.group : undefined,
         } as BuffDef));
+      // Bug fix 2026-05-05: when the user has tokens with default
+      // buffs applied but has never opened the palette's edit ✎ to
+      // save a custom catalog, the scene metadata is empty and the
+      // parsed array ends up empty too. Fall back to DEFAULT_BUFFS
+      // so the manage popover can still resolve names + colors for
+      // those default-catalog ids. Previously it just rendered "No
+      // buffs on this token" even when the token clearly had buffs.
+      catalog = parsed.length > 0 ? parsed : DEFAULT_BUFFS.slice();
     } else {
-      catalog = [];
+      catalog = DEFAULT_BUFFS.slice();
     }
   } catch {
-    catalog = [];
+    catalog = DEFAULT_BUFFS.slice();
   }
 }
 
