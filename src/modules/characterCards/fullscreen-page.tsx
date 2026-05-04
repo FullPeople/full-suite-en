@@ -89,11 +89,15 @@ function downloadJson(filename: string, data: any) {
 }
 
 // ===== Subcomponents =========================================
-function Header({ data, onExport, onImport, onRefresh }: {
+function Header({ data, onExport, onImport, onRefresh, readOnly }: {
   data: CharacterData;
   onExport: () => void;
   onImport: () => void;
   onRefresh: () => void;
+  /** EN variant: example-card mode hides Import + Refresh and shows
+   *  a "Read-only example" badge. Export still works so users can
+   *  take a modifiable copy. */
+  readOnly?: boolean;
 }) {
   const id = data.identity || {};
   const cs = data.core_stats || {};
@@ -126,15 +130,30 @@ function Header({ data, onExport, onImport, onRefresh }: {
         </div>
       </div>
       <div class="cc-head-right">
-        <button class="cc-btn" onClick={onRefresh} title="重新拉取服务器上的最新数据">
-          <span class="ic">↻</span>刷新
+        {readOnly && (
+          <span class="pip" style="background:rgba(245,166,35,0.18);color:#f0b94a;border:1px solid rgba(245,166,35,0.45);font-weight:700;letter-spacing:0.4px">
+            READ-ONLY EXAMPLE
+          </span>
+        )}
+        {!readOnly && (
+          <button class="cc-btn" onClick={onRefresh} title="重新拉取服务器上的最新数据">
+            <span class="ic">↻</span>刷新
+          </button>
+        )}
+        <button
+          class="cc-btn primary"
+          onClick={onExport}
+          title={readOnly
+            ? "Export this example as a JSON file you can edit and re-import as your own card."
+            : "把当前角色卡数据导出为 JSON 文件"}
+        >
+          <span class="ic">⬇</span>{readOnly ? "Export as my card" : "导出 JSON"}
         </button>
-        <button class="cc-btn primary" onClick={onExport} title="把当前角色卡数据导出为 JSON 文件">
-          <span class="ic">⬇</span>导出 JSON
-        </button>
-        <button class="cc-btn" onClick={onImport} title="从 JSON 文件加载角色卡（仅本地预览，未保存到服务器）">
-          <span class="ic">⬆</span>导入 JSON
-        </button>
+        {!readOnly && (
+          <button class="cc-btn" onClick={onImport} title="从 JSON 文件加载角色卡（仅本地预览，未保存到服务器）">
+            <span class="ic">⬆</span>导入 JSON
+          </button>
+        )}
       </div>
     </div>
   );
@@ -758,8 +777,31 @@ function App() {
   const [tab, setTab] = useState<TabKey>("overview");
   const roomId = getQS("room") || "";
   const cardId = getQS("card") || "";
+  // EN variant: when `?example=1` is set, this iframe loads the
+  // static example JSON shipped with the plugin (no server). The
+  // panel renders read-only — Import button is hidden, onPatch is
+  // a no-op so users can't accidentally mutate the reference card.
+  // Export JSON still works so users can take a copy as a starting
+  // point.
+  const exampleMode = getQS("example") === "1";
 
   const loadData = useCallback(async () => {
+    if (exampleMode) {
+      setError(null);
+      try {
+        // Path is relative to the plugin base URL (configured via
+        // SUITE_BASE in vite.config.ts). The iframe is hosted at
+        // /full-suite-en/cc-fullscreen.html so a relative fetch
+        // resolves to /full-suite-en/example-character-card.json
+        // automatically.
+        const res = await fetch("./example-character-card.json", { cache: "no-cache" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setData(await res.json());
+      } catch (e: any) {
+        setError(`Failed to load example: ${e?.message || String(e)}`);
+      }
+      return;
+    }
     if (!roomId || !cardId) {
       setError("URL 缺少 room 或 card 参数");
       return;
@@ -776,22 +818,27 @@ function App() {
     } catch (e: any) {
       setError(`加载失败：${e?.message || String(e)}`);
     }
-  }, [roomId, cardId]);
+  }, [roomId, cardId, exampleMode]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
   // Patch handler — for now updates local state only. Future: PUT to
   // server when /api/character/<room>/<card>/data endpoint exists.
+  // In example-mode it's a no-op so the reference card can't be
+  // mutated by stat-edit clicks etc. (the in-place HP/AC editor
+  // calls onPatch on commit).
   const onPatch = useCallback((patch: Partial<CharacterData>) => {
+    if (exampleMode) return;
     setData((prev) => prev ? { ...prev, ...patch } : prev);
-  }, []);
+  }, [exampleMode]);
 
   const onExport = useCallback(() => {
     if (!data) return;
     const id = data.identity || {};
     const name = id.display_name || id.character_name || "character";
-    downloadJson(`${name}-${cardId.slice(0,6)}.json`, data);
-  }, [data, cardId]);
+    const suffix = exampleMode ? "example" : cardId.slice(0, 6);
+    downloadJson(`${name}-${suffix}.json`, data);
+  }, [data, cardId, exampleMode]);
 
   const onImport = useCallback(() => {
     const inp = document.getElementById("ccFileInput") as HTMLInputElement | null;
@@ -857,7 +904,7 @@ function App() {
 
   return (
     <>
-      <Header data={data} onExport={onExport} onImport={onImport} onRefresh={loadData} />
+      <Header data={data} onExport={onExport} onImport={onImport} onRefresh={loadData} readOnly={exampleMode} />
       <StatsBanner data={data} onPatch={onPatch} />
       <div class="cc-tabs">
         {TABS.map((t) => (

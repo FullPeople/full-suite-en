@@ -14,6 +14,7 @@ import { assetUrl } from "./asset-base";
 import { bindPanelDrag, applyDragSide, watchDragSide } from "./utils/panelDrag";
 import { PANEL_IDS } from "./utils/panelLayout";
 import { installDebugOverlay } from "./utils/debugOverlay";
+import { getLocalFiles } from "./utils/localContent";
 
 // Cluster ROW iframe — only rendered while the user has the trigger
 // toggled on. Holds the actual action buttons. The row popover is
@@ -67,12 +68,8 @@ function recomputeBestiaryContent(): boolean {
     const s = getState();
     const enabledLibs = (s.libraries ?? []).filter((l) => l.enabled).length;
     if (enabledLibs > 0) return true;
-    // Local content count — same module the bestiary uses for gating.
-    // Lazy-import to avoid pulling localContent into the cluster-row's
-    // bundle if it ends up unused.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getLocalFiles } = require("./utils/localContent");
-    return Array.isArray(getLocalFiles()) && getLocalFiles().length > 0;
+    const local = getLocalFiles();
+    return Array.isArray(local) && local.length > 0;
   } catch { return false; }
 }
 

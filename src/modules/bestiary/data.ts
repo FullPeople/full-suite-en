@@ -23,21 +23,20 @@ function detectEdition(source: string): MonsterEdition {
 const DEFAULT_BASE = "https://5e.kiwee.top";
 
 function getEnabledLibraryBases(): string[] {
-  // Read library list lazily at call time. We deliberately import
-  // through a runtime-resolved path (not top-level `import`) because
-  // bestiary/data.ts is also pulled in by background bundles where
-  // suite state may not be initialised yet — falling back to the
-  // hardcoded DEFAULT_BASE is the right behaviour there.
+  // EN variant: no fallback. Empty libraries list = no remote data
+  // fetched. The bestiary module's setup() already short-circuits
+  // when libraries are empty, so this rarely runs in that state, but
+  // keeping the strict-empty contract here means accidental imports
+  // never reach the (intentionally absent) Chinese 5etools mirror.
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getState } = require("../../state") as typeof import("../../state");
     const libs = getState().libraries || [];
-    const bases = libs
+    return libs
       .filter((l) => l.enabled && typeof l.baseUrl === "string" && l.baseUrl.trim().length > 0)
       .map((l) => l.baseUrl.replace(/\/+$/, ""));
-    return bases.length > 0 ? bases : [DEFAULT_BASE];
   } catch {
-    return [DEFAULT_BASE];
+    return [];
   }
 }
 // Images: proxied through our own server so OBR can load them as WebGL textures

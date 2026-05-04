@@ -691,6 +691,28 @@ OBR.onReady(async () => {
   // Close via X button in the sidebar header, Esc, or clicking backdrop.
   closeBtn?.addEventListener("click", minimize);
 
+  // Read-only example card preview. Opens the cc-fullscreen iframe
+  // in OBR.modal mode with `?example=1`; the fullscreen page detects
+  // that flag and fetches the static example-character-card.json
+  // shipped in /full-suite-en/ instead of the server endpoint.
+  // Import button hidden inside the example view so users can't
+  // mutate or upload it; Export JSON still works → players who want
+  // to use it as a starting point click Export, edit the downloaded
+  // file, then load it via the regular import flow on a new card.
+  document.getElementById("exampleBtn")?.addEventListener("click", async () => {
+    try {
+      const url = `${assetUrl("cc-fullscreen.html")}?example=1`;
+      await OBR.modal.open({
+        id: "com.full-suite-en/cc-example",
+        url,
+        fullScreen: true,
+        hidePaper: true,
+      });
+    } catch (e) {
+      console.error("[cc-panel] open example failed", e);
+    }
+  });
+
   // About handler removed — centralized in suite About panel.
 
   // The "弹窗" toggle now lives in the floating controls popover sitting

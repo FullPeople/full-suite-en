@@ -184,19 +184,19 @@ body{background:rgba(10,10,20,0.3);backdrop-filter:blur(3px);-webkit-backdrop-fi
     <div class="side-head">
       <div class="title">📇 <span data-i18n="ccPanelTitle">角色卡</span></div>
       <div class="head-actions">
-        <!-- EN variant: only an example JSON download remains. The
-             legacy xlsx templates are gone (those bound a specific
-             Chinese-community sheet maintainer's revisions). The
-             example.json file is shipped in /public so users can
-             see the schema and edit it freely. -->
-        <a
+        <!-- EN variant: a single read-only "Example Card" preview.
+             Click → opens cc-fullscreen.html?example=1 in a modal.
+             The fullscreen page fetches /full-suite-en/example-
+             character-card.json instead of the server endpoint and
+             renders the card with Import disabled (read-only).
+             Players can use the in-card Export JSON button to
+             download a modifiable copy as their starting point. -->
+        <button
           class="icon-btn"
-          href="example-character-card.json"
-          download="example-character-card.json"
-          target="_blank"
-          rel="noopener"
-          title="Download an example character-card JSON to edit"
-        >📥 Example JSON</a>
+          id="exampleBtn"
+          type="button"
+          title="Open a read-only example character card. Use its Export JSON button to take a copy."
+        >📖 Example Card</button>
         <button class="close" id="closeBtn" data-i18n-title="ccPanelClose" title="关闭 (Esc)">✕</button>
       </div>
     </div>
