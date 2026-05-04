@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Owl Suite Cluster Trigger</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#eee}
+
+/* Iframe is 92×64 — wide enough to fit the button (48px) AND a
+   drag-grip beside it (18px) with breathing room. Anything outside
+   the iframe rect is clipped by OBR, so the grip MUST live inside.
+   data-side="right" → button hugs the LEFT edge, handle hugs the
+   RIGHT edge (cluster anchored to screen-left).
+   data-side="left"  → button hugs the RIGHT edge, handle on LEFT
+   (cluster dragged to screen-right). */
+/* Wrap: button + grip sit flush against each other (gap:0) and the
+   grip is the SAME height as the button so they read as one unit.
+   `data-side` flips which side the grip is on. */
+.wrap{
+  position:absolute;inset:0;
+  display:flex;align-items:center;
+  justify-content:center;
+  gap:0;
+  pointer-events:none;
+}
+.wrap[data-side="left"]{flex-direction:row-reverse}
+.main{
+  pointer-events:auto;
+  display:inline-flex;align-items:center;justify-content:center;
+  width:48px;height:48px;
+  background:linear-gradient(135deg,#3a3f55,#252a3a);
+  border:1px solid rgba(255,255,255,0.22);
+  border-radius:10px;
+  cursor:pointer;
+  box-shadow:0 2px 8px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+  padding:0;
+  transition:filter .12s, transform .08s;
+  overflow:hidden;
+  flex-shrink:0;
+}
+.main:hover{filter:brightness(1.18)}
+.main:active{transform:scale(0.96)}
+.main.is-on{
+  border-color:rgba(93,173,226,0.65);
+  box-shadow:0 0 0 1px rgba(93,173,226,0.55), 0 0 14px rgba(93,173,226,0.35), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.main img{width:42px;height:42px;display:block;image-rendering:auto;pointer-events:none}
+
+/* Drag grip — extended into the button area with negative margin so
+   the button visually COVERS the grip's inner half, eliminating the
+   awkward double-rounded-corner seam where they used to butt up
+   against each other. Outer corners 10px (matching the button's
+   radius) so the visible silhouette is one rounded chip with a
+   small ribbed pull-tab on one side. */
+.drag-grip{
+  pointer-events:auto;
+  display:flex;align-items:center;
+  /* Dots align toward the visible edge, not the centre — see the
+     side-aware justify rules below. */
+  justify-content:center;
+  width:30px;height:48px;
+  background:linear-gradient(135deg,#2c3245,#1d2231);
+  border:1px solid rgba(255,255,255,0.18);
+  color:rgba(255,255,255,0.55);
+  cursor:grab;
+  touch-action:none;user-select:none;
+  flex-shrink:0;
+  position:relative;
+  z-index:0;
+  transition:filter .12s, color .12s;
+  box-shadow:0 2px 8px rgba(0,0,0,0.45);
+}
+/* Button covers grip's inner half. */
+.main{position:relative;z-index:1}
+/* Side-aware overlap + outer rounding. data-side="right" puts grip
+   on the right of the button (cluster anchored screen-LEFT). The
+   grip overlaps the button by ~12px so 18px of grip is visible
+   outside the button. The 6 dots sit centred IN THE VISIBLE 18px
+   region, achieved by pushing them away from the inner (covered)
+   edge with a flex padding. */
+.wrap[data-side="right"] .drag-grip{
+  border-radius:0 10px 10px 0;
+  margin-left:-12px;
+  padding-left:5px;          /* shifts dots 5px toward visible edge */
+}
+.wrap[data-side="left"] .drag-grip{
+  border-radius:10px 0 0 10px;
+  margin-right:-12px;
+  padding-right:5px;
+}
+.drag-grip:hover{filter:brightness(1.18);color:#fff}
+.drag-grip.is-dragging{cursor:grabbing;color:#5dade2}
+.drag-grip svg{width:8px;height:18px;display:block;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap" data-side="right">
+  <button class="main" id="main" type="button" title="枭熊菜单 / Suite Menu">
+    <img src="/suite/exe_icon.png" alt="">
+  </button>
+  <div class="drag-grip" id="drag-handle" title="拖动 / Drag" aria-label="拖动悬浮按钮">
+    <svg viewBox="0 0 10 18" aria-hidden="true">
+      <circle cx="3" cy="3" r="1.2" fill="currentColor"/><circle cx="7" cy="3" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="9" r="1.2" fill="currentColor"/><circle cx="7" cy="9" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="15" r="1.2" fill="currentColor"/><circle cx="7" cy="15" r="1.2" fill="currentColor"/>
+    </svg>
+  </div>
+</div>
+<script type="module" src="/src/cluster.ts"></script>
+</body>
+</html>

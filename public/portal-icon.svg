@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <radialGradient id="portalGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.55"/>
+      <stop offset="55%" stop-color="#6366f1" stop-opacity="0.35"/>
+      <stop offset="92%" stop-color="#3a3490" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Glow fills the FULL 64×64 viewBox so the rendered diameter
+       equals 2×radius scene-units, matching the trigger zone 1:1. -->
+  <circle cx="32" cy="32" r="32" fill="url(#portalGlow)"/>
+  <g stroke="#e0e7ff" stroke-width="1.6" stroke-linecap="round" fill="none" opacity="0.9">
+    <path d="M32 4 a28 28 0 0 1 0 56 a16 16 0 0 1 0 -32 a7 7 0 0 1 0 14"/>
+    <path d="M32 4 a28 28 0 0 0 0 56" opacity="0.5"/>
+  </g>
+  <circle cx="32" cy="32" r="3" fill="#e0e7ff" opacity="0.85"/>
+</svg>

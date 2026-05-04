@@ -1,0 +1,17 @@
+{
+  "name": "Full Suite (EN)",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "author": "FullPeople",
+  "homepage_url": "https://github.com/FullPeople/full-suite-en",
+  "description": "All-in-one TRPG suite: dice, initiative, bestiary, character cards, search, time-stop, focus, portals, vision, status tracker.",
+  "icon": "/full-suite-en/exe_icon.png",
+  "background_url": "/full-suite-en/background.html",
+  "action": {
+    "title": "Dice",
+    "icon": "/full-suite-en/d20.png",
+    "popover": "/full-suite-en/dice-panel.html",
+    "width": 380,
+    "height": 620
+  }
+}

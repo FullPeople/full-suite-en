@@ -1,0 +1,425 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+:root {
+  --bg: #1a1a2e;
+  --bg2: #16213e;
+  --bg3: #0f3460;
+  --text: #eee;
+  --text2: #999;
+  --border: rgba(255,255,255,0.1);
+  --green: #27ae60;
+  --red: #e74c3c;
+  --blue: #3498db;
+  --gold: #f5a623;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Drag grip — sits inline inside .header-top, to the LEFT of the
+   search input. Participates in the flex row instead of overlapping
+   the search bar. */
+.drag-handle {
+  flex-shrink: 0;
+  width: 16px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: rgba(255, 255, 255, 0.30);
+  opacity: 0.55;
+  transition: opacity 0.12s, color 0.12s;
+  touch-action: none;
+  user-select: none;
+}
+.drag-handle:hover { opacity: 1; color: rgba(255, 255, 255, 0.85); }
+.drag-handle.is-dragging { cursor: grabbing; opacity: 1; color: #5dade2; }
+.drag-handle svg { width: 12px; height: 18px; display: block; pointer-events: none; }
+
+.header {
+  padding: 8px 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Search wrapper — gives the inline ✕ clear button a positioning
+   context. The ✕ used to live OUTSIDE the input as a separate
+   `.close-btn`, which most users mistook for "close panel". Now it
+   sits inside the input and only renders when there's text to clear. */
+.search-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+.search {
+  width: 100%;
+  height: 32px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  /* Right padding leaves room for the inline ✕ button so the typed
+     text doesn't run under it. */
+  padding: 0 30px 0 10px;
+  font-size: 13px;
+  outline: none;
+}
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-family: inherit;
+}
+.search-clear:hover {
+  background: rgba(231, 76, 60, 0.20);
+  color: var(--text);
+}
+
+.search:focus {
+  border-color: var(--green);
+}
+
+.search::placeholder {
+  color: var(--text2);
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.count {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.sort-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text2);
+  cursor: pointer;
+}
+
+.sort-btn:hover {
+  border-color: var(--green);
+  color: var(--text);
+}
+
+/* Source-code filter — inline mini-input next to the auto-init
+   toggle. Mostly for GMs who want to narrow the bestiary to their
+   own homebrew library tag (e.g. "kiwee", "PHB"). Persists per-
+   client via localStorage. */
+.source-filter-wrap {
+  margin-left: auto;
+  margin-right: 6px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.source-filter {
+  width: 90px;
+  height: 20px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 0 18px 0 6px;
+  font-size: 10.5px;
+  font-family: inherit;
+  outline: none;
+}
+.source-filter:focus {
+  border-color: var(--gold);
+}
+.source-filter::placeholder {
+  color: var(--text2);
+  opacity: 0.7;
+}
+.source-filter-clear {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.source-filter-clear:hover {
+  background: var(--red);
+  color: var(--text);
+}
+
+/* Auto-init toggle — same compact pill as the sort button. ON state
+   uses the green accent, OFF state stays muted with a strikethrough
+   so the GM can tell at a glance whether spawned tokens will join
+   the initiative tracker. */
+.auto-init-toggle {
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text2);
+  cursor: pointer;
+  margin-right: 6px;
+  font-family: inherit;
+  letter-spacing: 0.2px;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.auto-init-toggle.on {
+  background: rgba(46, 204, 113, 0.18);
+  border-color: rgba(46, 204, 113, 0.55);
+  color: #6fdc94;
+}
+.auto-init-toggle.on:hover {
+  background: rgba(46, 204, 113, 0.28);
+  border-color: rgba(46, 204, 113, 0.75);
+}
+.auto-init-toggle.off {
+  text-decoration: line-through;
+  text-decoration-color: rgba(231, 76, 60, 0.7);
+  text-decoration-thickness: 1.5px;
+}
+.auto-init-toggle.off:hover {
+  border-color: rgba(255, 255, 255, 0.30);
+  color: var(--text);
+}
+
+.ed-btn {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: .3px;
+  opacity: .55;
+}
+.ed-btn:hover {
+  border-color: var(--text2);
+  color: var(--text);
+}
+.ed-btn.on {
+  opacity: 1;
+  color: #5dade2;
+  border-color: rgba(93,173,226,0.45);
+  background: rgba(52,152,219,0.08);
+}
+.ed-btn.on:hover {
+  background: rgba(52,152,219,0.16);
+}
+
+.about-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: inherit;
+}
+.about-btn:hover {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+
+.list::-webkit-scrollbar { width: 3px; }
+.list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Monster card */
+.card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 3px;
+  border-radius: 6px;
+  background: var(--bg2);
+  cursor: pointer;
+  transition: background 0.15s;
+  border: 1px solid transparent;
+  /* Block native text selection and HTML5 drag — both interfere with
+     our pointerdown→drag-spawn flow (browser would capture pointer
+     events for selection / drag, modal's pointermove never fires
+     until release). */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.card * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.card:hover {
+  background: var(--bg3);
+  border-color: var(--green);
+}
+
+.card:active {
+  transform: scale(0.98);
+}
+
+/* Token image */
+.card-left { flex-shrink: 0; }
+
+.token {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg3);
+  /* Same reason as .card user-select above: stop the browser's
+     native image-drag from intercepting the pointer. */
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
+}
+
+.token-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text2);
+}
+
+/* Info */
+.card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-sub {
+  font-size: 10px;
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-tags {
+  display: flex;
+  gap: 3px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.08);
+  color: var(--text2);
+  white-space: nowrap;
+}
+
+/* Stats */
+.card-stats {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 28px;
+}
+
+.stat-val {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 8px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-val.hp { color: var(--red); }
+.stat-val.ac { color: var(--blue); }
+.stat-val.dex { color: var(--gold); }
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  padding: 40px;
+  text-align: center;
+}

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>传送门</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#292d3c;--bg-strong:#1f2230;--bg-card:#323748;
+  --border:rgba(255,255,255,0.12);--border-strong:rgba(255,255,255,0.20);
+  --text:#e6e8ee;--text-dim:#9aa0b3;
+  --accent:#5dade2;--accent-warm:#f5a623;--accent-red:#e74c3c;--accent-green:#2ecc71;
+}
+html,body{
+  height:100%;overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  color:var(--text);background:transparent;
+  pointer-events:none;
+  font-size:13px;
+}
+.card{
+  position:absolute;inset:0;
+  background:var(--bg);
+  border:1px solid var(--border-strong);
+  border-radius:10px;
+  box-shadow:0 12px 36px rgba(0,0,0,0.55);
+  pointer-events:auto;
+  display:flex;flex-direction:column;
+  padding:14px 16px;
+  overflow:hidden;
+}
+.hdr{
+  display:flex;align-items:center;gap:8px;
+  padding-bottom:10px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:12px;
+  flex-shrink:0;
+}
+.hdr .ic{font-size:14px;color:var(--accent)}
+.hdr .ttl{font-size:14px;font-weight:700;flex:1;letter-spacing:0.2px}
+.hdr .x{
+  cursor:pointer;font-size:18px;color:var(--text-dim);line-height:1;padding:0 4px;
+  background:none;border:none;
+  transition:color .12s;
+}
+.hdr .x:hover{color:var(--text)}
+
+.body{
+  flex:1;min-height:0;
+  display:flex;flex-direction:column;gap:10px;
+  overflow:hidden;
+}
+
+.row{flex-shrink:0}
+.row .lbl{
+  font-size:10.5px;color:var(--text-dim);margin-bottom:4px;letter-spacing:.4px;
+  font-weight:700;text-transform:uppercase;
+}
+.row input{
+  width:100%;height:32px;
+  background:var(--bg-strong);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:0 10px;color:var(--text);font-size:13px;outline:none;
+  font-family:inherit;
+  transition:border-color .12s, box-shadow .12s;
+}
+.row input:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 1px rgba(93,173,226,0.30);
+}
+
+.chips-wrap{flex-shrink:0}
+.chips-wrap .lbl-row{
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:10.5px;color:var(--text-dim);margin-bottom:5px;letter-spacing:.4px;
+  font-weight:700;text-transform:uppercase;
+}
+.chips-wrap .add{
+  font-size:10.5px;color:var(--accent);cursor:pointer;
+  background:none;border:none;padding:2px 8px;
+  border-radius:4px;
+  font-family:inherit;font-weight:700;
+  transition:background .12s, color .12s;
+}
+.chips-wrap .add:hover{background:rgba(93,173,226,0.15);color:#7ec8f0}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{
+  display:inline-flex;align-items:center;gap:3px;
+  padding:3px 6px 3px 9px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:11px;
+  font-size:11px;color:#cdd1de;
+  cursor:pointer;
+  user-select:none;
+  transition:background .12s, border-color .12s;
+}
+.chip:hover{
+  background:rgba(93,173,226,0.15);
+  border-color:rgba(93,173,226,0.35);
+  color:var(--text);
+}
+.chip .del{
+  font-size:11px;color:var(--text-dim);line-height:1;
+  margin-left:2px;
+  background:none;border:none;cursor:pointer;padding:1px 3px;
+  border-radius:4px;
+  font-family:inherit;
+  transition:color .12s, background .12s;
+}
+.chip .del:hover{color:var(--accent-red);background:rgba(231,76,60,.18)}
+
+.btn-row{
+  margin-top:auto;display:flex;gap:6px;justify-content:flex-end;
+  padding-top:12px;
+  border-top:1px solid var(--border);
+  flex-shrink:0;
+}
+.btn{
+  padding:7px 16px;border-radius:6px;font-size:12px;cursor:pointer;
+  border:1px solid transparent;font-family:inherit;font-weight:600;
+  transition:background .12s, border-color .12s, filter .12s;
+}
+.btn.del{
+  background:rgba(231,76,60,.14);color:var(--accent-red);
+  border-color:rgba(231,76,60,.32);
+  margin-right:auto;
+}
+.btn.del:hover{background:rgba(231,76,60,.24)}
+.btn.cancel{
+  background:var(--bg-strong);color:var(--text-dim);
+  border-color:var(--border);
+}
+.btn.cancel:hover{background:var(--bg-card);color:var(--text)}
+.btn.save{
+  background:rgba(93,173,226,0.22);
+  color:#7ec8f0;
+  border-color:rgba(93,173,226,0.42);
+}
+.btn.save:hover{
+  background:rgba(93,173,226,0.32);
+  border-color:rgba(93,173,226,0.55);
+}
+/* Lock-toggle button — square icon-style chip that flips between
+   "open padlock" (item.locked = false, default look) and "closed
+   padlock" (item.locked = true, warm-accent tint). Lives left of
+   Save / Cancel in the action row. */
+.btn.lock{
+  width:34px;
+  padding:7px 0;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--bg-strong);
+  color:var(--text-dim);
+  border-color:var(--border);
+}
+.btn.lock svg{width:14px;height:14px;display:block}
+.btn.lock:hover{
+  background:var(--bg-card);color:var(--text);
+  border-color:var(--border-strong);
+}
+.btn.lock.on{
+  background:rgba(245,166,35,0.18);
+  color:var(--accent-warm);
+  border-color:rgba(245,166,35,0.45);
+}
+.btn.lock.on:hover{
+  background:rgba(245,166,35,0.28);
+  border-color:rgba(245,166,35,0.65);
+}
+/* Closed-shackle path is hidden when unlocked; flip on the .on state.
+   Lets us share one SVG between both states without re-render. */
+.btn.lock .shackle-closed{display:none}
+.btn.lock.on .shackle-open{display:none}
+.btn.lock.on .shackle-closed{display:inline}
+/* The visibility / show-name buttons piggyback on the .lock icon-chip
+   styling so the row reads as one consistent set of toggles. The eye
+   shows a strike line when ON-state semantics flip ("on" = visible,
+   so we hide the strike then; OFF = hidden, strike visible). */
+.btn.lock .visible-strike{display:inline}
+.btn.lock.on .visible-strike{display:none}
+
+.add-form{display:none;margin-top:5px;gap:5px}
+.add-form.on{display:flex}
+.add-form input{
+  flex:1;height:26px;
+  background:var(--bg-strong);
+  border:1px solid var(--border);
+  border-radius:5px;padding:0 8px;color:var(--text);font-size:11.5px;outline:none;
+  font-family:inherit;
+  transition:border-color .12s;
+}
+.add-form input:focus{border-color:var(--accent)}
+.add-form button{
+  height:26px;padding:0 10px;border-radius:5px;font-size:11px;cursor:pointer;
+  background:rgba(93,173,226,0.18);border:1px solid rgba(93,173,226,0.40);
+  color:#7ec8f0;font-family:inherit;font-weight:600;
+  transition:background .12s;
+}
+.add-form button:hover{background:rgba(93,173,226,0.30)}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="hdr">
+    <span class="ic">◐</span>
+    <span class="ttl" id="title" data-i18n="portalTitle">传送门</span>
+    <button class="x" id="x">×</button>
+  </div>
+
+  <div class="body">
+    <div class="row">
+      <div class="lbl" data-i18n="portalLblName">名字</div>
+      <input id="inp-name" type="text" data-i18n-placeholder="portalNamePh" placeholder="例如 一楼" autocomplete="off">
+    </div>
+    <div class="chips-wrap">
+      <div class="lbl-row">
+        <span data-i18n="portalLblNamePresets">名字预设</span>
+        <button class="add" id="btn-add-name" data-i18n="portalAdd">+ 添加当前</button>
+      </div>
+      <div class="chips" id="chips-names"></div>
+    </div>
+
+    <div class="row">
+      <div class="lbl" data-i18n="portalLblTag">标签（同标签互联）</div>
+      <input id="inp-tag" type="text" data-i18n-placeholder="portalTagPh" placeholder="例如 001" autocomplete="off" maxlength="32">
+    </div>
+    <div class="chips-wrap">
+      <div class="lbl-row">
+        <span data-i18n="portalLblTagPresets">标签预设</span>
+        <button class="add" id="btn-add-tag" data-i18n="portalAdd">+ 添加当前</button>
+      </div>
+      <div class="chips" id="chips-tags"></div>
+    </div>
+  </div>
+
+  <!-- Action row order: [Show-name] [Visible] [Lock] [Save] [Cancel].
+       Save = persist current name/tag and close. Cancel reverts.
+       Close (X) and Enter still auto-save. Show-name / Visible /
+       Lock toggles all write through to the portal item immediately
+       and persist on the item itself, so re-opening the dialog
+       reflects the actual scene state. -->
+  <div class="btn-row">
+    <button class="btn lock" id="btn-show-name" type="button"
+            title="显示 / 隐藏名字标签"
+            aria-label="显示 / 隐藏名字标签"
+            aria-pressed="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <text x="8" y="11" text-anchor="middle" font-size="9" font-weight="700"
+              font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+              fill="currentColor" stroke="none">A</text>
+      </svg>
+    </button>
+    <button class="btn lock" id="btn-visible" type="button"
+            title="玩家可见 / 对玩家隐藏"
+            aria-label="玩家可见 / 对玩家隐藏"
+            aria-pressed="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 8 c1.5 -3 4 -4.5 6 -4.5 s4.5 1.5 6 4.5 c-1.5 3 -4 4.5 -6 4.5 s-4.5 -1.5 -6 -4.5 z"/>
+        <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/>
+        <line class="visible-strike" x1="3" y1="13" x2="13" y2="3" stroke-width="1.6"/>
+      </svg>
+    </button>
+    <button class="btn lock" id="btn-lock" type="button"
+            data-i18n-title="portalLockTitle"
+            title="锁定 / 解锁此传送门"
+            aria-label="锁定 / 解锁此传送门"
+            aria-pressed="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" stroke="none"/>
+        <path class="shackle-open"   d="M5 7 V5 a3 3 0 0 1 6 0"/>
+        <path class="shackle-closed" d="M5 7 V5 a3 3 0 0 1 6 0 V7"/>
+      </svg>
+    </button>
+    <button class="btn save"   id="btn-save"   data-i18n="portalSave">保存</button>
+    <button class="btn cancel" id="btn-cancel" data-i18n="portalCancel">取消</button>
+  </div>
+</div>
+<script type="module" src="/src/modules/portals/edit-page.ts"></script>
+</body>
+</html>

@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>枭熊插件 — 设置</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#292d3c;--bg-strong:#1f2230;--bg-card:#323748;
+  --border:rgba(255,255,255,0.12);--border-strong:rgba(255,255,255,0.20);
+  --text:#e6e8ee;--text-dim:#9aa0b3;
+  --accent:#5dade2;--accent-warm:#f5a623;--accent-red:#e74c3c;--accent-green:#2ecc71;
+  --kofi:#ff5e5b;
+}
+html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;overflow:hidden}
+body{display:flex;flex-direction:column;border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 12px 36px rgba(0,0,0,0.5)}
+
+.head{
+  flex-shrink:0;padding:12px 18px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--border);
+}
+.head h1{font-size:15px;font-weight:700;letter-spacing:0.3px}
+.lang-switch{
+  display:flex;background:rgba(0,0,0,0.3);border:1px solid var(--border);
+  border-radius:5px;overflow:hidden;
+}
+.lang-switch button{
+  background:transparent;border:none;color:var(--text-dim);
+  padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;
+  font-family:inherit;letter-spacing:0.5px;
+}
+.lang-switch button.on{background:rgba(93,173,226,0.25);color:#7ec8f0}
+.lang-switch button + button{border-left:1px solid var(--border)}
+
+.main{flex:1;min-height:0;display:flex}
+.tabs{
+  width:160px;flex-shrink:0;
+  border-right:1px solid var(--border);
+  background:var(--bg-strong);
+  overflow-y:auto;padding:8px 0;
+}
+.tabs::-webkit-scrollbar{width:5px}
+.tabs::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:2px}
+.tab{
+  display:block;width:100%;
+  padding:9px 14px;
+  background:transparent;border:none;
+  color:var(--text-dim);font-family:inherit;font-size:12px;text-align:left;
+  cursor:pointer;
+  border-left:3px solid transparent;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.tab:hover{background:rgba(255,255,255,0.04);color:var(--text)}
+.tab.on{background:rgba(93,173,226,0.10);color:#7ec8f0;border-left-color:var(--accent)}
+/* Inline "调试中" / BETA chip on tab labels for in-development modules.
+   Distinct color (warm amber) + tighter font so it doesn't crowd the
+   tab title. */
+.tab .tab-beta{
+  display:inline-block;
+  margin-left:6px;
+  padding:1px 5px;
+  font-size:9px;font-weight:800;
+  color:#1a1a2e;
+  background:rgba(245,166,35,0.85);
+  border-radius:3px;
+  letter-spacing:0.3px;
+  vertical-align:1px;
+}
+.tab .tab-sub{display:block;font-size:9.5px;color:var(--text-dim);margin-top:2px;letter-spacing:0.5px}
+
+/* Distinct accent colors for the first three "section" tabs so they
+   visually stand out from the per-module tabs underneath. Each gets its
+   own active border-left + active text tint. Inactive (rest) state
+   keeps a subtle hue badge so the user can spot them at a glance. */
+.tab[data-tab="support"]{color:#ff8aa8}
+.tab[data-tab="support"]:hover{background:rgba(231,72,113,0.10);color:#ffb3c5}
+.tab[data-tab="support"].on{background:rgba(231,72,113,0.18);color:#ff8aa8;border-left-color:#e94871}
+
+.tab[data-tab="important"]{color:#f5d76e}
+.tab[data-tab="important"]:hover{background:rgba(245,166,35,0.10);color:#ffe19a}
+.tab[data-tab="important"].on{background:rgba(245,166,35,0.18);color:#f5d76e;border-left-color:#f5a623}
+
+.tab[data-tab="version"]{color:#5fd692}
+.tab[data-tab="version"]:hover{background:rgba(46,204,113,0.10);color:#8de5b1}
+.tab[data-tab="version"].on{background:rgba(46,204,113,0.18);color:#5fd692;border-left-color:#27ae60}
+
+/* Library settings — purple accent so it visually stands out from the
+   per-module tabs (mirrors the section-tab convention above). */
+.tab[data-tab="libraries"]{color:#bb87dd}
+.tab[data-tab="libraries"]:hover{background:rgba(155,89,182,0.10);color:#d4a8ec}
+.tab[data-tab="libraries"].on{background:rgba(155,89,182,0.18);color:#bb87dd;border-left-color:#9b59b6}
+
+.content-wrap{
+  flex:1;min-width:0;
+  display:flex;flex-direction:column;
+}
+
+/* Per-tab top bar: title (left) + plugin enable toggle (right, only for
+   plugin tabs that actually have a flag) */
+.top-bar{
+  flex-shrink:0;
+  padding:12px 22px 10px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  border-bottom:1px solid var(--border);
+}
+.top-bar h2{font-size:14px;font-weight:700;color:#fff;letter-spacing:0.2px}
+.top-bar .meta{font-size:10.5px;color:var(--text-dim)}
+
+.content{
+  flex:1;min-height:0;
+  overflow-y:auto;padding:14px 22px;
+  line-height:1.65;
+}
+.content::-webkit-scrollbar{width:6px}
+.content::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:3px}
+
+.content h3{font-size:12.5px;font-weight:700;color:var(--accent-warm);margin-top:14px;margin-bottom:6px;letter-spacing:0.3px}
+
+/* Bold text inside descriptions gets a tint so it actually pops
+   against the prose. Without this, <b> just bumps weight which is
+   nearly invisible on the dark background at 12.5px. Three tints:
+   - .content b — default warm gold for emphasised terms
+   - <em> — secondary lighter blue (used for "verb / button name"
+     references that still want highlight but not as loud as bold)
+   - <kbd> — pill-style chip for keystrokes. */
+.content b{color:#f5d076;font-weight:700}
+.content em{color:#9ad9ff;font-style:normal}
+.content kbd{
+  display:inline-block;
+  padding:1px 6px;
+  font-family:ui-monospace,Consolas,monospace;
+  font-size:10.5px;font-weight:700;
+  color:#fff7c2;
+  background:rgba(255,255,255,0.07);
+  border:1px solid rgba(255,255,255,0.20);
+  border-bottom-width:2px;
+  border-radius:4px;
+  letter-spacing:0.2px;
+  vertical-align:1px;
+}
+.content code{
+  font-family:ui-monospace,Consolas,monospace;
+  font-size:11px;
+  color:#7ec8f0;
+  background:rgba(93,173,226,0.10);
+  border:1px solid rgba(93,173,226,0.22);
+  border-radius:4px;
+  padding:0 4px;
+}
+
+/* Collapsible rule blocks (e.g. dice expression syntax) — keeps the
+   default state compact since most users don't need the full
+   reference card on every visit. */
+.rules-collapse{
+  border:1px solid rgba(255,255,255,0.12);
+  border-radius:6px;
+  margin:10px 0;
+  background:rgba(255,255,255,0.03);
+}
+.rules-collapse > summary{
+  cursor:pointer;
+  padding:8px 12px;
+  font-size:12px;
+  color:var(--text);
+  user-select:none;
+  border-radius:6px;
+  list-style:none;
+}
+.rules-collapse > summary::-webkit-details-marker{display:none}
+.rules-collapse > summary::before{
+  content:"▶";
+  display:inline-block;
+  margin-right:6px;
+  font-size:10px;
+  color:var(--accent);
+  transition:transform .15s;
+}
+.rules-collapse[open] > summary::before{transform:rotate(90deg)}
+.rules-collapse > summary:hover{background:rgba(255,255,255,0.04)}
+.rules-collapse > ul{padding:6px 14px 12px 30px}
+.content h3:first-child{margin-top:0}
+.content p{margin-bottom:8px;color:#cdd1de;font-size:12.5px}
+.content ul{padding-left:18px;margin-bottom:10px}
+.content li{margin-bottom:4px;color:#cdd1de;font-size:12.5px}
+.content a{color:var(--accent);text-decoration:none}
+.content a:hover{text-decoration:underline}
+
+/* === Toggle switch === */
+.tog{
+  flex-shrink:0;width:42px;height:22px;
+  background:rgba(0,0,0,0.4);border:1px solid var(--border);
+  border-radius:11px;cursor:pointer;padding:0;position:relative;
+  transition:background .18s, border-color .18s;
+}
+.tog::before{
+  content:"";position:absolute;top:1px;left:1px;
+  width:18px;height:18px;background:#9aa0b3;border-radius:50%;
+  transition:left .18s, background .18s;
+}
+.tog.on{background:rgba(46,204,113,0.3);border-color:rgba(46,204,113,0.6)}
+.tog.on::before{left:21px;background:#2ecc71}
+.tog:disabled{opacity:0.45;cursor:not-allowed}
+
+/* === 3-segment slider for data version ===
+   Sized to its content (was visually extending toward the panel
+   edge thanks to surrounding flex children). `width:fit-content`
+   guarantees it hugs the buttons; the buttons themselves use
+   tighter horizontal padding so the overall pill is compact. */
+.seg{
+  display:inline-flex;align-items:center;
+  width:fit-content;
+  background:rgba(0,0,0,0.3);border:1px solid var(--border-strong);
+  border-radius:8px;overflow:hidden;height:32px;
+  margin:8px 0;
+}
+.seg button{
+  background:transparent;border:none;
+  color:var(--text-dim);font-family:inherit;font-size:11.5px;font-weight:700;
+  padding:0 12px;height:100%;cursor:pointer;letter-spacing:0.3px;
+  border-right:1px solid var(--border);
+  transition:background .12s, color .12s;
+}
+.seg button:last-child{border-right:none}
+.seg button:hover{background:rgba(255,255,255,0.05);color:var(--text)}
+.seg button.on{background:rgba(93,173,226,0.25);color:#7ec8f0}
+.seg button:disabled{cursor:not-allowed;opacity:0.5}
+
+.row{display:flex;align-items:center;gap:10px;padding:7px 0}
+.row .lbl{flex:1}
+.row .lbl .desc{font-size:10.5px;color:var(--text-dim);margin-top:1px}
+
+.warn{
+  background:rgba(245,166,35,0.12);
+  border:1px solid rgba(245,166,35,0.30);
+  border-radius:6px;padding:8px 10px;font-size:11px;color:#f5d76e;
+  margin-top:10px;line-height:1.5;
+}
+.note{
+  background:rgba(255,255,255,0.03);
+  border-left:3px solid var(--accent-warm);
+  padding:9px 12px;margin-top:10px;font-size:11.5px;color:#bbb;border-radius:0 4px 4px 0;line-height:1.6;
+}
+
+/* Support tab buttons — muted style; uses tinted background rather than
+   their full brand colors so they read as part of the suite UI rather
+   than competing for attention. */
+.support-row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 8px}
+.support-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:7px 14px;border-radius:6px;
+  font-family:inherit;font-size:12px;font-weight:500;
+  text-decoration:none;
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  color:var(--text);
+  transition:background .15s, border-color .15s;
+}
+.support-btn:hover{
+  text-decoration:none;
+  background:rgba(255,255,255,0.08);
+  border-color:var(--border-strong);
+}
+.support-btn.kofi:hover{border-color:rgba(255,94,91,0.4)}
+.support-btn.kofi .ic{color:var(--kofi)}
+.support-btn.afdian:hover{border-color:rgba(255,107,157,0.4)}
+.support-btn.afdian .ic{color:#ff6b9d}
+.support-btn .ic{font-size:14px;line-height:1}
+
+/* WeChat / Alipay QR thumbnails sit next to the Ko-fi / Afdian
+   buttons in the support-row. Kept compact (54×54) so they don't
+   tower over the buttons; hovering enlarges + dims the rest so the
+   user can scan with their phone without opening a separate page. */
+.qr-pair{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:3px 5px;
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  border-radius:6px;
+}
+.qr-thumb{
+  width:54px;height:54px;
+  object-fit:cover;
+  border-radius:4px;
+  background:#fff;        /* QR codes need a white backing */
+  border:1px solid rgba(255,255,255,0.10);
+  cursor:zoom-in;
+  transition:transform .18s ease-out, box-shadow .18s ease-out, z-index 0s;
+}
+.qr-thumb:hover{
+  transform:scale(3.4);
+  transform-origin:center center;
+  box-shadow:0 8px 24px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.4);
+  position:relative;
+  z-index:50;
+}
+.contact-box{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-top:10px;font-size:12px}
+.contact-box code{font-family:ui-monospace,Consolas,monospace;color:var(--accent)}
+
+/* Backer-credit list (Support tab → 鸣谢 / Thanks block).
+   Each chip cycles through a non-red rainbow border + glow on a 6s
+   loop. Chips stagger by index via animation-delay so the colors
+   ripple along the row instead of pulsing in sync. */
+.backers-box{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:6px;
+  padding:7px 10px;margin-top:6px;font-size:11px;
+}
+.backers-box p{margin:0 0 5px;font-size:11px;color:#cdd1de}
+.backers{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0}
+.backer{
+  display:inline-flex;align-items:center;
+  padding:2px 8px;border-radius:9px;
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(167,139,250,0.45);
+  color:#e6e8ee;
+  font-size:10.5px;font-weight:600;
+  letter-spacing:0.2px;
+  animation:backer-rainbow 6s linear infinite;
+}
+/* Stagger the rainbow phase per chip so neighbours show different
+   colors at the same time. Negative delays start the animation
+   already partway through. Phase step ≈ 6s / N for a smooth wave;
+   tuned for ~15 chips (0.4s steps). */
+.backer:nth-child(2){animation-delay:-0.4s}
+.backer:nth-child(3){animation-delay:-0.8s}
+.backer:nth-child(4){animation-delay:-1.2s}
+.backer:nth-child(5){animation-delay:-1.6s}
+.backer:nth-child(6){animation-delay:-2.0s}
+.backer:nth-child(7){animation-delay:-2.4s}
+.backer:nth-child(8){animation-delay:-2.8s}
+.backer:nth-child(9){animation-delay:-3.2s}
+.backer:nth-child(10){animation-delay:-3.6s}
+.backer:nth-child(11){animation-delay:-4.0s}
+.backer:nth-child(12){animation-delay:-4.4s}
+.backer:nth-child(13){animation-delay:-4.8s}
+.backer:nth-child(14){animation-delay:-5.2s}
+.backer:nth-child(15){animation-delay:-5.6s}
+.backer:nth-child(16){animation-delay:-0.2s}
+.backer:nth-child(17){animation-delay:-0.6s}
+.backer:nth-child(18){animation-delay:-1.0s}
+.backer:nth-child(19){animation-delay:-1.4s}
+.backer:nth-child(20){animation-delay:-1.8s}
+@keyframes backer-rainbow {
+  /* Skips the red zone — palette goes orange → yellow → green →
+     cyan → blue → violet → orange. */
+  0%   { border-color:rgba(245,166,35,0.55);  box-shadow:0 0 8px 1px rgba(245,166,35,0.45); }
+  16%  { border-color:rgba(245,215,110,0.55); box-shadow:0 0 8px 1px rgba(245,215,110,0.45); }
+  33%  { border-color:rgba(46,204,113,0.55);  box-shadow:0 0 8px 1px rgba(46,204,113,0.45); }
+  50%  { border-color:rgba(93,173,226,0.55);  box-shadow:0 0 8px 1px rgba(93,173,226,0.45); }
+  66%  { border-color:rgba(155,89,182,0.55);  box-shadow:0 0 8px 1px rgba(155,89,182,0.45); }
+  83%  { border-color:rgba(167,139,250,0.55); box-shadow:0 0 8px 1px rgba(167,139,250,0.45); }
+  100% { border-color:rgba(245,166,35,0.55);  box-shadow:0 0 8px 1px rgba(245,166,35,0.45); }
+}
+.backers-extra{
+  font-size:10px;color:var(--text-dim);font-style:italic;
+  margin:5px 0 0 !important;
+  line-height:1.4;
+}
+
+/* Supporters EN/ZH inline tab switcher (pure-CSS via radio inputs) */
+.supporters-tabs-wrap{margin:6px 0 4px}
+.sup-radio{position:absolute;opacity:0;pointer-events:none}
+.supporters-tabs{
+  display:flex;gap:4px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:6px;
+}
+.sup-tab{
+  padding:5px 12px;
+  font-size:11px;font-weight:600;
+  color:var(--text-dim);
+  cursor:pointer;
+  border-bottom:2px solid transparent;
+  transition:color .12s,border-color .12s;
+  user-select:none;
+}
+.sup-tab:hover{color:var(--text)}
+/* Active-tab styling driven by sibling radio's :checked state */
+.sup-radio-en:checked ~ .supporters-tabs .sup-tab-en,
+.sup-radio-zh:checked ~ .supporters-tabs .sup-tab-zh{
+  color:#7ec8f0;
+  border-bottom-color:var(--accent);
+}
+/* Pane visibility: hidden by default, shown when matching radio is on */
+.sup-pane{display:none}
+.sup-radio-en:checked ~ .sup-pane-en{display:block}
+.sup-radio-zh:checked ~ .sup-pane-zh{display:block}
+.sup-empty{
+  font-size:11px;color:var(--text-dim);font-style:italic;
+  padding:8px 6px;
+  text-align:center;
+  background:rgba(255,255,255,0.02);
+  border-radius:5px;
+  border:1px dashed var(--border);
+}
+
+/* Important-notes tab: stepped instructions with screenshots */
+.step{margin:12px 0 16px;padding:12px 14px;background:rgba(255,255,255,0.03);border-radius:6px;border-left:3px solid var(--accent)}
+.step-title{font-size:12.5px;font-weight:700;color:#7ec8f0;margin-bottom:6px}
+.step p{margin-bottom:6px;font-size:12px;color:#cdd1de}
+.step img{display:block;max-width:100%;height:auto;border-radius:4px;margin:6px 0;box-shadow:0 2px 6px rgba(0,0,0,0.4);background:var(--bg-card)}
+.tip-line{font-size:11.5px;color:var(--text-dim);margin-top:6px}
+.benefit-list{padding-left:18px;margin:8px 0 12px}
+.benefit-list li{margin-bottom:4px;color:#cdd1de;font-size:12px}
+.benefit-tag{display:inline-block;font-size:10px;background:rgba(52,152,219,0.15);color:#5dade2;padding:2px 6px;border-radius:4px;margin-right:6px}
+
+.role-notice{font-size:10.5px;color:var(--text-dim);font-style:italic}
+
+/* Settings download button — used by the character-card tab to expose
+   the xlsx template directly inside Settings (saves the user from
+   hunting for it inside the cc panel side-rail). */
+.dl-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  margin-top:10px;
+  padding:8px 14px;
+  background:linear-gradient(180deg, rgba(46,204,113,0.18), rgba(38,160,90,0.22));
+  border:1px solid rgba(46,204,113,0.45);
+  border-radius:6px;
+  color:#a3e9bf;font-size:12.5px;font-weight:700;
+  text-decoration:none;
+  letter-spacing:0.3px;
+  cursor:pointer;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.dl-btn:hover{
+  background:linear-gradient(180deg, rgba(46,204,113,0.28), rgba(38,160,90,0.32));
+  color:#d2f5dd;
+}
+.dl-btn:active{transform:scale(0.98)}
+.dl-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.dl-row .dl-btn{margin-top:0}
+
+/* === 基础设置 — block layout for grouped sub-settings === */
+.basics-block{display:flex;flex-direction:column;gap:4px}
+.basics-h{
+  font-size:11px;font-weight:700;color:#cdd1de;
+  letter-spacing:0.4px;
+  text-transform:uppercase;
+  margin-bottom:2px;
+}
+.basics-toggle{
+  display:flex;align-items:center;gap:8px;
+  cursor:pointer;
+  font-size:12px;color:var(--text);
+  user-select:none;
+}
+.basics-toggle input{
+  width:14px;height:14px;cursor:pointer;
+  accent-color:#5dade2;
+}
+
+/* Panel-layout reset button — appears in 基础设置 → 面板布局 block.
+   Solid red since it's a destructive-ish action (wipes per-client
+   panel-position memory). Compact, fits next to the description text. */
+.reset-panels-btn{
+  align-self:flex-start;
+  height:28px;
+  padding:0 14px;
+  background:rgba(192,57,43,0.85);
+  border:1px solid rgba(231,76,60,0.7);
+  border-radius:6px;
+  color:#fff;
+  font-family:inherit;font-size:11.5px;font-weight:600;
+  cursor:pointer;
+  transition:filter 0.12s, border-color 0.12s;
+}
+.reset-panels-btn:hover{filter:brightness(1.12);border-color:#e74c3c}
+.reset-panels-btn:active{filter:brightness(0.92)}
+
+/* Open-the-layout-editor button. Sits next to the reset button in
+   the same row. Blue to distinguish from the destructive red reset. */
+.layout-editor-btn{
+  align-self:flex-start;
+  height:28px;
+  padding:0 14px;
+  background:rgba(52,152,219,0.85);
+  border:1px solid rgba(93,173,226,0.7);
+  border-radius:6px;
+  color:#fff;
+  font-family:inherit;font-size:11.5px;font-weight:600;
+  cursor:pointer;
+  transition:filter 0.12s, border-color 0.12s;
+}
+.layout-editor-btn:hover{filter:brightness(1.12);border-color:#5dade2}
+.layout-editor-btn:active{filter:brightness(0.92)}
+
+/* === 库设置 === */
+.lib-warn{
+  background:rgba(245,166,35,0.10);
+  border:1px solid rgba(245,166,35,0.35);
+  border-radius:6px;
+  padding:8px 12px;
+  font-size:11.5px;color:#f5d76e;
+  line-height:1.55;
+  margin-bottom:12px;
+}
+.lib-warn code{
+  background:rgba(0,0,0,0.35);
+  padding:1px 5px;border-radius:3px;
+  font-size:10.5px;
+}
+.lib-list{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.lib-row{
+  display:flex;flex-direction:column;gap:6px;
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:6px;
+  padding:8px 10px;
+}
+.lib-row-head{display:flex;align-items:center;gap:8px}
+.lib-row-head .lib-name{
+  flex:1;min-width:0;
+  background:rgba(0,0,0,0.30);
+  border:1px solid rgba(255,255,255,0.10);
+  color:#fff;font-size:12px;
+  padding:5px 8px;border-radius:4px;
+  font-family:inherit;
+}
+.lib-row-head .lib-name:read-only{opacity:0.7}
+.lib-row-url{display:flex;align-items:center;gap:6px}
+.lib-row-url .lib-row-label{
+  flex-shrink:0;
+  font-size:10.5px;color:#9ab;font-weight:700;
+  font-family:ui-monospace,Consolas,monospace;
+}
+.lib-url{
+  flex:1;min-width:0;
+  background:rgba(0,0,0,0.30);
+  border:1px solid rgba(255,255,255,0.10);
+  color:#cde;font-size:11px;
+  padding:4px 8px;border-radius:4px;
+  font-family:ui-monospace,Consolas,monospace;
+}
+.lib-url:read-only{opacity:0.7}
+.lib-tag{
+  font-size:9px;font-weight:700;
+  color:#7be0a0;background:rgba(46,204,113,0.18);
+  padding:2px 6px;border-radius:3px;letter-spacing:0.4px;
+}
+.lib-del-btn{
+  flex-shrink:0;width:24px;height:24px;
+  background:rgba(231,76,60,0.18);
+  border:1px solid rgba(231,76,60,0.35);
+  color:#ff8b7a;
+  border-radius:4px;font-size:12px;cursor:pointer;
+  font-family:inherit;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s;
+}
+.lib-del-btn:hover:not(:disabled){background:rgba(231,76,60,0.30)}
+.lib-del-btn:disabled{opacity:0.45;cursor:not-allowed}
+.lib-actions{margin-bottom:14px}
+.lib-add-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 14px;
+  background:rgba(52,152,219,0.18);
+  border:1px solid rgba(52,152,219,0.40);
+  color:#7ec8f0;font-weight:700;
+  border-radius:6px;font-size:11.5px;
+  cursor:pointer;font-family:inherit;
+  transition:background .12s;
+}
+.lib-add-btn:hover{background:rgba(52,152,219,0.30)}
+
+/* Preview button + diagnostic panel inside each library row */
+.lib-preview-btn{
+  flex-shrink:0;
+  padding:5px 10px;
+  background:rgba(155,89,182,0.18);
+  border:1px solid rgba(155,89,182,0.40);
+  color:#cda9e8;font-weight:700;
+  border-radius:4px;font-size:11px;
+  cursor:pointer;font-family:inherit;
+  white-space:nowrap;
+  transition:background .12s;
+}
+.lib-preview-btn:hover:not(:disabled){background:rgba(155,89,182,0.30)}
+.lib-preview-btn:disabled{opacity:0.55;cursor:wait}
+.lib-preview{
+  margin-top:8px;
+  padding:10px 12px;
+  background:rgba(0,0,0,0.32);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:5px;
+  font-size:11.5px;
+}
+.lib-preview-status{
+  font-weight:700;font-size:12px;
+  word-break:break-all;
+  display:block;
+}
+.lib-preview-status.ok{color:#7be0a0}
+.lib-preview-status.fail{color:#ff8b7a}
+.lib-preview-count{color:#9aa3b0;font-weight:500;font-size:11px;margin-left:6px}
+.lib-preview-section{margin-top:10px}
+.lib-preview-h{
+  font-weight:800;color:#cdd9ec;
+  font-size:11px;text-transform:uppercase;letter-spacing:0.4px;
+  margin-bottom:4px;
+}
+.lib-preview-srcmap{
+  display:flex;flex-wrap:wrap;gap:4px;
+}
+.lib-preview-srcmap code{
+  background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:3px;
+  padding:1px 6px;
+  font-size:10.5px;
+}
+.lib-preview-tbl{
+  width:100%;border-collapse:collapse;font-size:10.5px;
+}
+.lib-preview-tbl thead th{
+  text-align:left;
+  background:rgba(255,255,255,0.04);
+  padding:3px 5px;
+  border-bottom:1px solid rgba(255,255,255,0.10);
+  font-weight:700;color:#9aa3b0;
+}
+.lib-preview-tbl tbody td{
+  padding:3px 5px;
+  border-bottom:1px solid rgba(255,255,255,0.04);
+  vertical-align:top;
+}
+.lib-preview-tbl tbody tr:hover td{background:rgba(255,255,255,0.03)}
+.lib-preview-tbl code{
+  background:rgba(255,255,255,0.04);
+  border-radius:2px;padding:0 4px;font-size:10px;
+}
+.lib-preview-probe{
+  display:flex;flex-direction:column;gap:1px;
+  padding:5px 7px;
+  border-radius:4px;
+  margin-bottom:3px;
+  font-size:10.5px;
+}
+.lib-preview-probe.ok{background:rgba(46,204,113,0.10);border:1px solid rgba(46,204,113,0.25)}
+.lib-preview-probe.fail{background:rgba(231,76,60,0.12);border:1px solid rgba(231,76,60,0.30)}
+.lib-preview-probe-label{font-weight:700;color:#dde}
+.lib-preview-probe.ok .lib-preview-probe-label{color:#9be0b3}
+.lib-preview-probe.fail .lib-preview-probe-label{color:#ff8b7a}
+.lib-preview-probe-url{color:#9aa3b0;font-family:ui-monospace,Consolas,monospace;font-size:10px;word-break:break-all}
+.lib-preview-probe-status{color:#cdd9ec;font-size:10.5px}
+.lib-preview-err{
+  background:rgba(231,76,60,0.10);
+  border:1px solid rgba(231,76,60,0.30);
+  border-radius:4px;
+  padding:8px 10px;
+  color:#ffbcb0;font-size:11px;
+  white-space:pre-wrap;word-break:break-word;
+  font-family:ui-monospace,Consolas,monospace;
+  margin-top:6px;
+}
+.lib-preview-hint{
+  margin-top:10px;color:#9ab;font-size:11px;line-height:1.6;
+}
+.lib-preview-empty{color:#9aa3b0;font-style:italic;font-size:11px;margin:4px 0}
+
+/* Local content block — sits between URL libraries and the tutorial */
+.lib-local{
+  margin:14px 0;
+  padding:10px 12px;
+  background:rgba(46,204,113,0.06);
+  border:1px solid rgba(46,204,113,0.22);
+  border-radius:6px;
+}
+.lib-local-h{
+  margin:0 0 4px;
+  font-size:13px;color:#9be0b3;
+  font-weight:800;
+}
+.lib-local-desc{
+  margin:0 0 8px;font-size:11.5px;line-height:1.6;color:#b8c4d0;
+}
+.lib-local-actions{
+  display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;
+}
+.lib-local-actions button{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;
+  background:rgba(46,204,113,0.18);
+  border:1px solid rgba(46,204,113,0.45);
+  color:#a8e9c2;font-weight:700;
+  border-radius:6px;font-size:11.5px;
+  cursor:pointer;font-family:inherit;
+  transition:background .12s;
+}
+.lib-local-actions button:hover{background:rgba(46,204,113,0.30)}
+.lib-local-list{
+  display:flex;flex-direction:column;gap:4px;
+}
+.lib-local-empty{
+  margin:4px 0;color:#7e8794;font-size:11px;font-style:italic;
+}
+.lib-local-row{
+  display:flex;align-items:center;gap:8px;
+  padding:5px 8px;
+  background:rgba(0,0,0,0.18);
+  border:1px solid rgba(255,255,255,0.06);
+  border-radius:4px;
+  font-size:11.5px;
+}
+.lib-local-name{
+  flex:1;min-width:0;color:#dde;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:ui-monospace,Consolas,monospace;
+}
+.lib-local-meta{
+  flex-shrink:0;color:#9aa3b0;font-size:10.5px;
+}
+.lib-local-del{
+  flex-shrink:0;
+  width:22px;height:22px;
+  background:rgba(231,76,60,0.18);
+  border:1px solid rgba(231,76,60,0.35);
+  color:#ff8b7a;
+  border-radius:4px;font-size:11px;cursor:pointer;
+  font-family:inherit;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s;
+}
+.lib-local-del:hover:not(:disabled){background:rgba(231,76,60,0.30)}
+.lib-local-del:disabled{opacity:0.45;cursor:not-allowed}
+
+/* Tutorial collapsible */
+.lib-tut{
+  background:rgba(0,0,0,0.20);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:6px;
+  padding:6px 10px;
+  font-size:12px;
+}
+.lib-tut > summary{
+  cursor:pointer;
+  font-weight:700;color:#cde;
+  padding:4px 0;
+  list-style:none;
+  user-select:none;
+}
+.lib-tut > summary::before{
+  content:"▶";
+  display:inline-block;
+  margin-right:6px;
+  font-size:10px;color:#7aa2c4;
+  transition:transform .15s;
+}
+.lib-tut[open] > summary::before{transform:rotate(90deg)}
+.lib-tut-body{padding:6px 0 4px}
+.lib-tut-body h4{
+  font-size:12px;color:#f5a623;font-weight:700;
+  margin:10px 0 4px;padding-bottom:2px;
+  border-bottom:1px solid rgba(245,166,35,0.20);
+}
+.lib-tut-body p{margin:4px 0;line-height:1.6;color:#d2d6e3}
+.lib-tut-body pre{
+  background:rgba(0,0,0,0.40);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:4px;
+  padding:8px 10px;margin:6px 0;
+  overflow-x:auto;
+  font-size:10.5px;line-height:1.5;
+  color:#cde;
+  font-family:ui-monospace,Consolas,monospace;
+}
+.lib-tut-body code{
+  background:rgba(0,0,0,0.30);
+  padding:1px 5px;border-radius:3px;
+  font-size:10.5px;color:#7ec8f0;
+}
+.lib-tut-body ol, .lib-tut-body ul{margin:4px 0 4px 22px;color:#d2d6e3}
+.lib-tut-body li{margin-bottom:3px;line-height:1.55}
+.lib-prompt{
+  width:100%;
+  height:140px;
+  resize:vertical;
+  background:rgba(0,0,0,0.40);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:4px;
+  padding:8px 10px;
+  font-size:10.5px;line-height:1.55;
+  color:#cde;
+  font-family:ui-monospace,Consolas,monospace;
+  margin:6px 0;
+}
+.lib-prompt-copy{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:5px 12px;
+  background:rgba(46,204,113,0.18);
+  border:1px solid rgba(46,204,113,0.40);
+  color:#7be0a0;font-weight:700;
+  border-radius:5px;font-size:11px;
+  cursor:pointer;font-family:inherit;
+  transition:background .12s;
+}
+.lib-prompt-copy:hover{background:rgba(46,204,113,0.30)}
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1 id="title">设置</h1>
+    <div class="lang-switch">
+      <button id="langZh" class="on" type="button">CN</button>
+      <button id="langEn" type="button">EN</button>
+    </div>
+  </div>
+  <div class="main">
+    <nav class="tabs" id="tabs"></nav>
+    <article class="content-wrap">
+      <div class="top-bar" id="topBar"></div>
+      <div class="content" id="content"></div>
+    </article>
+  </div>
+<script type="module" src="/src/settings.ts"></script>
+</body>
+</html>

@@ -1,0 +1,178 @@
+import OBR from "@owlbear-rodeo/sdk";
+import { assetUrl } from "../asset-base";
+
+// "Time Stop" / 时停模式 module — migrated from time-stop plugin.
+//
+// Trigger paths:
+//   1. Right-click empty space → context menu "开启/关闭时停"
+//   2. Cluster button → broadcasts BC_TIMESTOP_TOGGLE (handled here)
+//
+// State persisted in scene metadata so mid-scene joiners auto-enter time
+// stop. Player tokens are locked when on, unlocked (only those WE locked)
+// when off.
+
+const PLUGIN_ID = "com.time-stop"; // backward-compat scene-meta key
+const META_KEY = `${PLUGIN_ID}/state`;
+const LOCK_TAG = `${PLUGIN_ID}/locked-by-timestop`;
+const MODAL_ID = `${PLUGIN_ID}/overlay`;
+const BROADCAST_ON = `${PLUGIN_ID}/on`;
+const BROADCAST_OFF = `${PLUGIN_ID}/off`;
+const BC_TOGGLE = "com.full-suite-en/timestop-toggle";
+const BC_STATE = "com.full-suite-en/timestop-state";
+
+const MENU_ID = `${PLUGIN_ID}/toggle`;
+const ICON_URL = assetUrl("timestop-icon.svg");
+const OVERLAY_URL = assetUrl("timestop-overlay.html");
+
+const unsubs: Array<() => void> = [];
+let isGM = false;
+
+async function isTimeStopActive(): Promise<boolean> {
+  try {
+    const meta = await OBR.scene.getMetadata();
+    return !!(meta[META_KEY] as any)?.active;
+  } catch { return false; }
+}
+
+// Track local overlay state so we don't re-issue OBR.modal.open on a
+// modal that's already shown — that re-fires the iframe's CSS
+// transition and the user sees the cinematic letterbox bars
+// "flicker" / re-animate. Reproed on the GM client when scene
+// metadata changes during an active time stop (state-sync triggers
+// a re-checkState which would call showOverlay a second time).
+let overlayShown = false;
+let overlayPassThrough = false;
+
+async function showOverlay(passThrough: boolean) {
+  // Already visible with the same gating? Nothing to do.
+  if (overlayShown && overlayPassThrough === passThrough) return;
+  try {
+    await OBR.modal.open({
+      id: MODAL_ID,
+      url: OVERLAY_URL,
+      fullScreen: true,
+      hidePaper: true,
+      hideBackdrop: true,
+      disablePointerEvents: passThrough,
+    });
+    overlayShown = true;
+    overlayPassThrough = passThrough;
+  } catch {}
+}
+
+async function hideOverlay() {
+  try { await OBR.modal.close(MODAL_ID); } catch {}
+  overlayShown = false;
+}
+
+// Per user feedback (2026-04-30): time stop should ONLY block player
+// input via the full-screen overlay + force-deselect. We no longer
+// lock individual tokens — that was belt-and-suspenders that also
+// unhelpfully prevented the GM from moving anything during the
+// effect. Kept unlockOldLockedItems() as a one-time migration so any
+// tokens still carrying the legacy LOCK_TAG from older versions get
+// unlocked the next time time stop fires (or scene loads).
+async function unlockOldLockedItems() {
+  try {
+    const items = await OBR.scene.items.getItems(
+      (item) => item.metadata[LOCK_TAG] === true
+    );
+    if (items.length === 0) return;
+    const ids = items.map((i) => i.id);
+    await OBR.scene.items.updateItems(ids, (drafts) => {
+      for (const d of drafts) {
+        d.locked = false;
+        delete d.metadata[LOCK_TAG];
+      }
+    });
+  } catch (e) {
+    console.warn("[obr-suite/timeStop] legacy unlock skipped", e);
+  }
+}
+
+function notifyClusterState(active: boolean) {
+  try {
+    OBR.broadcast.sendMessage(BC_STATE, { active }, { destination: "LOCAL" });
+  } catch {}
+}
+
+async function turnOn() {
+  await OBR.scene.setMetadata({ [META_KEY]: { active: true } });
+  await OBR.broadcast.sendMessage(BROADCAST_ON, {});
+  await showOverlay(true); // GM gets pass-through overlay
+  // Belt-and-suspenders: scrub any legacy locked tokens left over
+  // from the old "lock all characters" behaviour so they don't stay
+  // un-movable by the GM during this time stop.
+  await unlockOldLockedItems();
+  notifyClusterState(true);
+}
+
+async function turnOff() {
+  await OBR.scene.setMetadata({ [META_KEY]: { active: false } });
+  await OBR.broadcast.sendMessage(BROADCAST_OFF, {});
+  await hideOverlay();
+  await unlockOldLockedItems();
+  notifyClusterState(false);
+}
+
+async function toggle() {
+  if (!isGM) return;
+  if (await isTimeStopActive()) await turnOff();
+  else await turnOn();
+}
+
+export async function setupTimeStop(): Promise<void> {
+  isGM = (await OBR.player.getRole()) === "GM";
+
+  // Right-click context menu removed per user feedback — the only entry
+  // point is now the cluster's 时停 button (GM-only).
+
+  unsubs.push(
+    OBR.broadcast.onMessage(BC_TOGGLE, async () => {
+      if (!isGM) return;
+      await toggle();
+    })
+  );
+
+  // Players: on ON broadcast, force deselect + show overlay (modal blocks pointer)
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_ON, async () => {
+      if (!isGM) {
+        try { await OBR.player.deselect(); } catch {}
+        await showOverlay(false);
+      }
+      notifyClusterState(true);
+    })
+  );
+
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_OFF, async () => {
+      await hideOverlay();
+      notifyClusterState(false);
+    })
+  );
+
+  // Mid-scene join: re-apply state.
+  const checkState = async () => {
+    if (!(await OBR.scene.isReady())) return;
+    if (await isTimeStopActive()) {
+      if (!isGM) { try { await OBR.player.deselect(); } catch {} }
+      await showOverlay(isGM);
+      notifyClusterState(true);
+    } else {
+      notifyClusterState(false);
+    }
+  };
+  await checkState();
+  // OBR.scene.onReadyChange is added at the shell level — when scene ready
+  // flips and modules need to re-check their state, the shell calls
+  // teardownTimeStop / setupTimeStop. So no need for our own listener.
+}
+
+export async function teardownTimeStop(): Promise<void> {
+  // Context menu was removed but we still try in case an old listener
+  // lingered.
+  try { await OBR.contextMenu.remove(MENU_ID); } catch {}
+  for (const u of unsubs.splice(0)) u();
+  await hideOverlay();
+}

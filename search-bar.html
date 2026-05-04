@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>5E 全局搜索</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#eee}
+
+.wrap{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;
+  pointer-events:none;
+}
+/* Vertical-direction flipping. data-vert="top" (default): the search
+   row sits at the iframe top, detail panel grows DOWN below it (and
+   the drag-grip tab pokes out below the row). data-vert="bottom":
+   the row sits at the iframe BOTTOM, detail panel sits ABOVE it,
+   drag-grip pokes out ABOVE the row.
+   Implemented via flex `order` per child. */
+.wrap[data-vert="top"] .row{order:1}
+.wrap[data-vert="top"] .search-drag-grip{order:2}
+.wrap[data-vert="top"] .tools{order:3}
+.wrap[data-vert="top"] > .body{order:4}
+
+.wrap[data-vert="bottom"] > .body{order:1}
+.wrap[data-vert="bottom"] .tools{order:2}
+.wrap[data-vert="bottom"] .search-drag-grip{order:3}
+.wrap[data-vert="bottom"] .row{order:4}
+
+/* === Input row — always visible === */
+.row{
+  pointer-events:auto;
+  height:36px;flex-shrink:0;
+  margin:2px 4px 2px 4px;
+  display:flex;align-items:center;gap:0;
+  background:linear-gradient(135deg,rgba(22,33,62,0.95),rgba(15,52,96,0.95));
+  border:1px solid rgba(255,255,255,0.18);
+  border-radius:18px;
+  box-shadow:0 4px 14px rgba(0,0,0,0.4);
+  padding:0 10px;
+  transition:border-color .15s, box-shadow .15s;
+}
+.row:focus-within{
+  border-color:rgba(93,173,226,0.65);
+  box-shadow:0 4px 14px rgba(52,152,219,0.45);
+}
+.row .ico{
+  flex-shrink:0;width:14px;height:14px;color:#7aa2c4;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.row input{
+  flex:1;min-width:0;
+  background:transparent;border:none;outline:none;
+  font-family:inherit;font-size:13px;color:#fff;
+  padding:0 8px;height:34px;
+}
+.row input::placeholder{color:rgba(255,255,255,0.4)}
+.row .clear{
+  flex-shrink:0;
+  width:22px;height:22px;
+  background:transparent;border:none;color:rgba(255,255,255,0.4);
+  cursor:pointer;font-size:14px;line-height:1;border-radius:11px;
+  font-family:inherit;padding:0;
+  display:none;
+}
+.wrap.has-q .row .clear{display:inline-flex;align-items:center;justify-content:center}
+.row .clear:hover{background:rgba(255,255,255,0.1);color:#fff}
+
+/* === Tools row (filters) — only visible when expanded.
+   display:none when collapsed so the popover takes only the input row's
+   physical height (40px); clicks below pass through to the canvas. */
+.tools{
+  pointer-events:auto;
+  display:none;
+  height:28px;flex-shrink:0;
+  margin:0 4px 2px 4px;
+  padding:0 6px;
+  align-items:center;gap:6px;
+  background:rgba(15,20,40,0.92);
+  border:1px solid rgba(255,255,255,0.10);
+  border-bottom:none;
+  border-radius:6px 6px 0 0;
+}
+.wrap.has-q:not(.collapsed) .tools{display:flex}
+
+/* Unified segmented frame around all functional toggles — one outer
+   border, vertical hairlines between buttons. The state colors paint
+   ONLY each cell's interior so the frame stays neat regardless of
+   how many buttons are on/off. */
+.tog-group{
+  display:inline-flex;align-items:stretch;
+  height:22px;
+  background:rgba(0,0,0,0.28);
+  border:1px solid rgba(255,255,255,0.16);
+  border-radius:11px;
+  overflow:hidden;
+}
+
+.tools .tog{
+  font-family:inherit;font-size:10.5px;font-weight:700;
+  height:100%;padding:0 10px;
+  cursor:pointer;letter-spacing:0.3px;
+  background:transparent;
+  border:none;
+  border-right:1px solid rgba(255,255,255,0.10);
+  border-radius:0;
+  color:rgba(255,255,255,0.45);
+  transition:background .15s, color .15s;
+  position:relative;
+}
+.tools .tog:last-child{border-right:none}
+.tools .tog:hover{background:rgba(255,255,255,0.08)}
+
+.tools .tog.on.t-2014{background:rgba(245,166,35,0.28);color:#f5d76e}
+.tools .tog.on.t-2024{background:rgba(52,152,219,0.28);color:#7ec8f0}
+.tools .tog.on.t-mon{background:rgba(46,204,113,0.25);color:#7be0a0}
+
+/* OFF state for "允许玩家查询怪物" — red strikethrough through text +
+   red interior tint, contained within the frame cell. */
+.tools .tog.off.t-mon{
+  text-decoration:line-through;
+  text-decoration-color:#e74c3c;
+  text-decoration-thickness:2px;
+  background:rgba(231,76,60,0.10);
+  color:#e74c3c;
+}
+
+.tools .count{margin-left:auto;font-size:10.5px;color:#7aa;font-family:ui-monospace,Consolas,monospace}
+
+/* === Body: dropdown (left) + preview (right). display:none when
+   collapsed so it doesn't take up popover space (clicks pass through). */
+.wrap > .body{
+  pointer-events:auto;
+  flex:1;min-height:0;
+  margin:0 4px 4px 4px;
+  display:none;
+  background:rgba(15,20,40,0.96);
+  border:1px solid rgba(255,255,255,0.12);
+  border-top:none;
+  border-radius:0 0 12px 12px;
+  box-shadow:0 6px 22px rgba(0,0,0,0.5);
+  backdrop-filter:blur(6px);
+  overflow:hidden;
+}
+.wrap.has-q:not(.collapsed) > .body{display:flex}
+
+.drop{
+  width:280px;flex-shrink:0;
+  overflow-y:auto;
+  border-right:1px solid rgba(255,255,255,0.08);
+}
+.drop::-webkit-scrollbar{width:5px}
+.drop::-webkit-scrollbar-track{background:transparent}
+.drop::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:2px}
+
+.preview{
+  flex:1;min-width:0;
+  overflow-y:auto;
+  padding:12px 14px;
+  font-size:12.5px;line-height:1.55;
+}
+.preview::-webkit-scrollbar{width:5px}
+.preview::-webkit-scrollbar-track{background:transparent}
+.preview::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:2px}
+
+.hint{padding:14px 16px;font-size:11.5px;color:#888;text-align:center;line-height:1.6}
+.hint.err{color:#e74c3c}
+
+/* === Result rows === */
+.row-item{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 12px;cursor:pointer;
+  border-bottom:1px solid rgba(255,255,255,0.04);
+  font-family:inherit;
+  text-decoration:none;color:inherit;
+  outline:none;
+}
+.row-item:last-child{border-bottom:none}
+.row-item:hover, .row-item.kbd-active{background:rgba(52,152,219,0.18)}
+.row-item.pinned{background:rgba(241,196,15,0.18);box-shadow:inset 3px 0 0 #f5a623}
+.row-item .cat{
+  flex-shrink:0;width:54px;text-align:center;
+  font-size:9.5px;font-weight:700;
+  padding:2px 0;border-radius:10px;
+  background:rgba(255,255,255,0.06);color:#9ab;
+  letter-spacing:0.3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.row-item .cat.cat-1, .row-item .cat.cat-46{background:rgba(231,76,60,0.18);color:#ff8b7a}
+.row-item .cat.cat-2{background:rgba(155,89,182,0.18);color:#bb87dd}
+.row-item .cat.cat-4, .row-item .cat.cat-56, .row-item .cat.cat-57, .row-item .cat.cat-54{background:rgba(241,196,15,0.18);color:#f5d76e}
+.row-item .cat.cat-10{background:rgba(46,204,113,0.18);color:#5fd692}
+.row-item .cat.cat-5, .row-item .cat.cat-40, .row-item .cat.cat-41, .row-item .cat.cat-30{background:rgba(52,152,219,0.18);color:#5dade2}
+.row-item .cat.cat-3{background:rgba(230,126,34,0.18);color:#f0a96a}
+.row-item .cat.cat-8{background:rgba(26,188,156,0.18);color:#52d4be}
+.row-item .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.row-item .name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-item .sub{font-size:10.5px;color:#7aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-item .src{
+  flex-shrink:0;font-size:9.5px;color:#666;
+  font-family:ui-monospace,Consolas,monospace;
+  text-transform:uppercase;
+}
+.row-item .src.ed-2024{color:#7ec8f0}
+.row-item .src.ed-2014{color:#f5d76e}
+mark{
+  background:rgba(241,196,15,0.4);color:#fff;
+  padding:0 1px;border-radius:2px;
+}
+
+/* === Preview pane === */
+.prev-empty{
+  height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-size:12px;color:#666;text-align:center;line-height:1.7;
+}
+.prev-empty-sub{font-size:10.5px;color:#555;margin-top:4px}
+.prev-loading{font-size:11.5px;color:#888;text-align:center;padding:20px 0}
+
+.prev-head{margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08)}
+.prev-title{font-size:15px;font-weight:700;color:#fff;line-height:1.25}
+.prev-eng{font-size:11px;color:#7aa;margin-top:2px}
+.prev-meta{font-size:10.5px;color:#888;margin-top:5px;font-family:ui-monospace,Consolas,monospace}
+.prev-subtitle{font-size:11.5px;color:#bbb;margin:0 0 8px;font-style:italic}
+
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0 10px}
+.chip{
+  display:inline-flex;align-items:stretch;
+  background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);
+  border-radius:4px;font-size:10.5px;line-height:1;
+  overflow:hidden;
+}
+.chip-l{padding:3px 6px;background:rgba(0,0,0,0.25);color:#9ab;font-weight:600}
+.chip-v{padding:3px 7px;color:#ddd}
+
+/* Monster: ability score grid + summary lines */
+.ab-grid{
+  display:grid;grid-template-columns:repeat(6, 1fr);gap:4px;
+  margin:8px 0 10px;
+}
+.ab-cell{
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:5px;padding:4px 0;text-align:center;
+}
+.ab-label{font-size:9px;color:#9ab;font-weight:700;letter-spacing:0.5px}
+.ab-score{font-size:13px;font-weight:700;color:#fff;line-height:1.1}
+.ab-mod{font-size:10px;color:#7aa}
+
+.mon-summary{
+  background:rgba(255,255,255,0.03);
+  border-left:3px solid rgba(93,173,226,0.5);
+  border-radius:0 4px 4px 0;
+  padding:6px 10px;margin:0 0 10px;
+  font-size:11.5px;line-height:1.55;
+}
+.ms-line{display:flex;gap:6px}
+.ms-l{flex-shrink:0;color:#9ab;font-weight:700;min-width:48px}
+.ms-v{color:#ddd}
+
+.trait{margin:0 0 7px;font-size:12.5px;line-height:1.55}
+.trait p{margin:0 0 4px;display:inline}
+.trait p + p{display:block;margin-top:4px}
+
+.preview p{margin:0 0 8px}
+.preview p:last-child{margin-bottom:0}
+.preview h4{font-size:12.5px;font-weight:700;color:#f5a623;margin:12px 0 5px;letter-spacing:0.3px;border-bottom:1px solid rgba(245,166,35,0.25);padding-bottom:2px}
+.preview ul{margin:4px 0 8px 18px}
+.preview li{margin-bottom:3px}
+.preview table{width:100%;border-collapse:collapse;margin:8px 0;font-size:11px}
+.preview th,.preview td{border:1px solid rgba(255,255,255,0.1);padding:3px 6px;text-align:left}
+.preview th{background:rgba(255,255,255,0.04);color:#9ab;font-weight:700}
+.preview .inset{background:rgba(255,255,255,0.03);border-left:3px solid #5dade2;padding:6px 10px;margin:8px 0;border-radius:0 4px 4px 0}
+.preview blockquote{border-left:3px solid rgba(245,166,35,0.5);padding:4px 10px;margin:8px 0;color:#bbb;font-style:italic}
+.preview .quote-by{font-size:10.5px;color:#888;margin-top:4px;font-style:normal}
+
+/* 5etools rollable inline tags ({@dice} / {@damage} / {@hit} etc.).
+   Click → fires a quick-roll on the currently-selected token. */
+.preview .rollable{
+  cursor:pointer;
+  color:#7fc3eb;
+  font-weight:600;
+  border-radius:3px;
+  padding:0 3px;
+  transition:background .12s, color .12s;
+}
+.preview .rollable:hover{
+  background:rgba(93,173,226,0.20);
+  color:#bfe2f5;
+}
+.preview .rollable.rollable-flash{
+  animation: searchRollFlash 0.4s ease-out;
+}
+@keyframes searchRollFlash{
+  0%   {background:rgba(93,173,226,0.55); transform:scale(1.18); display:inline-block}
+  100% {background:transparent; transform:scale(1)}
+}
+
+/* Drag grip — same architecture as cluster + trigger but pinned to
+   the RIGHT of the input row regardless of which quadrant the bar
+   sits in. Height matches the input row (38px), width 32px. The
+   inner 12px of the grip overlaps the row; the row's z-index keeps
+   it in front so only the outer 20px is visible as a grab tab. The
+   six dots are shifted toward the visible (right) edge by 5px so
+   they look centred in the visible-only region. */
+.search-drag-grip{
+  pointer-events:auto;
+  position:absolute;
+  top:2px;
+  right:0;
+  width:32px;height:38px;
+  display:flex;align-items:center;justify-content:center;
+  padding-left:5px;            /* shift dots toward visible right edge */
+  background:linear-gradient(135deg,rgba(22,33,62,0.95),rgba(15,52,96,0.95));
+  border:1px solid rgba(255,255,255,0.18);
+  border-left:none;
+  border-radius:0 18px 18px 0; /* outer (right) corners match bar 18px */
+  color:rgba(255,255,255,0.55);
+  cursor:grab;
+  touch-action:none;user-select:none;
+  z-index:0;
+  transition:color .12s, filter .12s;
+  box-shadow:0 2px 6px rgba(0,0,0,0.32);
+}
+/* Row sits IN FRONT of the grip — covers the inner overlap. */
+.row{position:relative;z-index:1}
+.tools{position:relative;z-index:1}
+.wrap > .body{position:relative;z-index:1}
+/* Reserve 20px on the right for the grip's visible portion so the
+   input field doesn't crowd the dots. */
+.row,
+.tools,
+.wrap > .body{margin-right:20px}
+.search-drag-grip:hover{color:#fff;filter:brightness(1.18)}
+.search-drag-grip.is-dragging{cursor:grabbing;color:#5dade2}
+.search-drag-grip svg{width:8px;height:18px;display:block;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="row" id="row">
+    <span class="ico" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+    </span>
+    <input id="q" type="text"
+           data-i18n-placeholder="searchPlaceholder"
+           placeholder="搜索 5etools…（怪物/法术/物品/职业/种族…）"
+           autocomplete="off" spellcheck="false">
+    <button class="clear" id="clear" type="button" data-i18n-aria="searchClearAria" aria-label="清空">✕</button>
+  </div>
+
+  <!-- Drag-grip tab — pokes out from the side of the search row
+       (right end when bar grows leftward, left end when bar grows
+       rightward). Negative margin tucks half of the grip under the
+       input row; the row's z-index covers the overlap so only the
+       outer half is visible as a grab target. -->
+  <div class="search-drag-grip" id="search-drag-handle" title="拖动 / Drag" aria-label="拖动搜索栏">
+    <svg viewBox="0 0 8 18" aria-hidden="true">
+      <circle cx="2" cy="3" r="1.2" fill="currentColor"/><circle cx="6" cy="3" r="1.2" fill="currentColor"/>
+      <circle cx="2" cy="9" r="1.2" fill="currentColor"/><circle cx="6" cy="9" r="1.2" fill="currentColor"/>
+      <circle cx="2" cy="15" r="1.2" fill="currentColor"/><circle cx="6" cy="15" r="1.2" fill="currentColor"/>
+    </svg>
+  </div>
+
+  <!-- Tools row only shows the result count now — version + player-monster
+       toggles moved to the suite Settings panel (centralized). -->
+  <div class="tools" id="tools">
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="body" id="body">
+    <div class="drop" id="drop"></div>
+    <div class="preview" id="preview"></div>
+  </div>
+</div>
+<script type="module" src="/src/modules/search/page.ts"></script>
+</body>
+</html>

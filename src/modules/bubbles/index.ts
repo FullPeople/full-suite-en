@@ -1,0 +1,1620 @@
+// Bubbles — HP bar + AC + temp-HP stat indicators on tokens.
+//
+// Adapted from "Stat Bubbles for D&D" by Seamus Finlayson:
+//   https://github.com/SeamusFinlayson/Bubbles-for-Owlbear-Rodeo
+// That project and this suite are both GNU GPL-3.0. What's shared is
+// the architectural shape (compound items per token, image-grid-aware
+// positioning via OBR's Math2, the metadata-key namespace) and the
+// functional layout constants required for visual parity (bar height,
+// bubble diameter, padding, opacities). The implementation below is
+// written fresh, tracking the suite's existing module conventions.
+//
+// Layout:
+//
+//   ┌───────────── token bounds ─────────────┐
+//   │                                        │
+//   │           [ token image ]              │
+//   │                                        │
+//   │ ╭──────── HP bar full width ────────╮  │
+//   │ │  current/max +temp-HP suffix       │  │   ← ⌐ bar straddles bottom edge
+//   ╰─╰────────────────────────────────────╯──╯
+//                                  ┌──┐  ┌──┐
+//                                  │+5│  │16│   ← Temp HP / AC stat bubbles
+//                                  └──┘  └──┘     (above the bar, right-aligned)
+
+import OBR, {
+  buildCurve,
+  buildEffect,
+  buildShape,
+  buildText,
+  Image,
+  Item,
+  isImage,
+  Math2,
+  Vector2,
+} from "@owlbear-rodeo/sdk";
+
+const PLUGIN_ID = "com.full-suite-en/bubbles";
+const BUBBLE_OWNER_KEY = `${PLUGIN_ID}/owner`;
+// Role tag stamped onto each item's metadata so the in-place
+// `patchGeometry` dispatcher knows what kind of update to apply
+// (each role updates different fields — Curve.points vs
+// Shape.width/height vs Effect.uniforms vs Text dimensions).
+const BUBBLE_ROLE_KEY = `${PLUGIN_ID}/role`;
+type BubbleRole =
+  | "hp-bg" | "hp-fill" | "hp-shimmer" | "hp-text"
+  | "ac-shield" | "ac-text"
+  | "temp-bg"  | "temp-text";
+
+function bubbleMeta(tokenId: string, role: BubbleRole): Record<string, unknown> {
+  return { [BUBBLE_OWNER_KEY]: tokenId, [BUBBLE_ROLE_KEY]: role };
+}
+
+export const LS_BUBBLES_ENABLED = `${PLUGIN_ID}/enabled`;
+export const LS_BUBBLES_SCALE = `${PLUGIN_ID}/scale`;
+// Per-client vertical offset in scene-coord pixels. Negative shifts the
+// whole bubble cluster upward (away from the token); the default -20
+// keeps everything clear of the token's name label that OBR draws
+// just below the bubble row.
+export const LS_BUBBLES_VERTICAL_OFFSET = `${PLUGIN_ID}/vertical-offset`;
+const DEFAULT_VERTICAL_OFFSET = -20;
+
+// Per-DM-room player visibility threshold (in percent, 0-100). For
+// LOCKED tokens, the player-side displayed HP ratio is quantised to
+// the next ceiling step of size T% — e.g. T=25 means players see
+// 100/75/50/25/0 only. T=0 → no quantisation (continuous). T=100 →
+// always 100% (progress invisible). Stored per-DM-client so different
+// tables can pick their own granularity.
+export const LS_BUBBLES_PLAYER_THRESHOLD = `${PLUGIN_ID}/player-threshold`;
+const DEFAULT_PLAYER_THRESHOLD = 25;
+
+// Initiative-tracker scene metadata key — bubbles reads it to decide
+// whether locked tokens should show their bar to players right now
+// (during prep / combat) or stay hidden (idle).
+const COMBAT_STATE_KEY = "com.initiative-tracker/combat";
+
+// Compatibility namespace — shared with the upstream extension so a
+// scene previously using it migrates transparently.
+export const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
+
+// Suite binding markers — bubbles only renders for tokens that the
+// suite has explicitly tagged as a bestiary monster or a character
+// card. Plain image tokens (decorations, NPCs without HP, etc.)
+// shouldn't sprout an HP bar even if they happen to carry stale
+// bubbles metadata from a previous binding.
+const CC_BIND_KEY = "com.character-cards/boundCardId";
+const BESTIARY_SLUG_KEY = "com.bestiary/slug";
+const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
+
+// --- Functional constants matching upstream for visual parity ----------
+const BAR_HEIGHT = 20;
+const BAR_PADDING = 2;
+const BAR_CORNER_RADIUS = BAR_HEIGHT / 2;
+const BG_OPACITY = 0.6;
+// Bumped from 0.5 → 0.85 so the red fill reads as a clear "this is
+// the HP bar" instead of a faint translucent wash on top of the
+// canvas. Matches the user's "目前太淡" feedback.
+const FILL_OPACITY = 0.85;
+const BAR_FONT_SIZE = 22;
+
+const DIAMETER = 30;
+const BUBBLE_FONT_SIZE = DIAMETER - 8;          // 22, fits 1–2 digits
+const BUBBLE_FONT_SIZE_TIGHT = DIAMETER - 15;   // 15, used for 3 digits
+const TEXT_VERTICAL_OFFSET = -0.3;              // OBR text rendering nudge
+
+// Stat bubble palette. HP_FILL is a darker, more saturated red so
+// the bar stays legible at lower opacities and against varied map
+// art (was the lighter #e74c3c earlier).
+const HP_FILL = "#a52424";
+const HP_BG = "#A4A4A4";
+const HP_BG_HIDDEN = "#000000";    // GM-only when stats are hidden from players
+const TEMP_HP_COLOR = "#3b82f6";    // blue
+const AC_COLOR = "#c0c4cc";         // silver
+
+const FONT_FAMILY = "Roboto, sans-serif";
+
+// Single inheritance config: SCALE attachment-inheritance disabled
+// for ALL bubble item types. This is v1.0.42's baseline — many
+// rounds of trying split-by-type or NATIVE+SCALE-on recipes for
+// Effects vs Curves traded one bug for another (drag-revert,
+// position-stuck-on-commit, double-scale, etc). v1.0.42 + this
+// config has the cleanest steady state: static / initial / post-
+// commit are all correct; gesture-time live tracking is sacrificed.
+// HP bar polish work is parked at the lowest priority — picking
+// correctness in the common case over fidelity in the gesture
+// preview.
+const DISABLE_INHERIT: Array<"SCALE" | "ROTATION" | "LOCKED" | "COPY"> = [
+  "SCALE",
+  "ROTATION",
+  "LOCKED",
+  "COPY",
+];
+
+// --- Data shape ---------------------------------------------------------
+interface BubbleData {
+  hp: number;
+  maxHp: number;
+  tempHp: number;
+  ac: number | null;
+  hide: boolean;
+  /** Per-token DM lock. When true (default for new tokens) the player
+   *  view is combat-gated: no bar in idle, bar without text+AC in
+   *  prep/combat with the player-threshold quantization applied. When
+   *  false everyone sees the full bar with text. The DM toggles this
+   *  via the lock icon at the right end of the cc-info / monster-info
+   *  stat banner. */
+  locked: boolean;
+}
+
+function readBubbleData(item: Item): BubbleData | null {
+  const m = (item.metadata as any)?.[BUBBLES_META];
+  if (!m || typeof m !== "object") return null;
+  const hpRaw = Number(m["health"]);
+  const maxRaw = Number(m["max health"]);
+  const tempRaw = Number(m["temporary health"]);
+  const acRaw = m["armor class"];
+  const hasHp = Number.isFinite(maxRaw) && maxRaw > 0;
+  const hasAc = acRaw != null && Number.isFinite(Number(acRaw));
+  if (!hasHp && !hasAc) return null;
+  // `locked` defaults to TRUE when the field is absent — matches the
+  // user's spec ("默认上锁"). DM unlock writes an explicit `false`.
+  const lockedRaw = m["locked"];
+  const locked = lockedRaw === undefined ? true : !!lockedRaw;
+  return {
+    hp: Number.isFinite(hpRaw) ? Math.max(0, Math.min(hpRaw, hasHp ? maxRaw : hpRaw)) : (hasHp ? maxRaw : 0),
+    maxHp: hasHp ? maxRaw : 0,
+    tempHp: Number.isFinite(tempRaw) && tempRaw > 0 ? Math.floor(tempRaw) : 0,
+    ac: hasAc ? Number(acRaw) : null,
+    hide: !!m["hide"],
+    locked,
+  };
+}
+
+function dataHash(d: BubbleData): string {
+  return `${d.hp}|${d.maxHp}|${d.tempHp}|${d.ac == null ? "_" : d.ac}|${d.hide ? 1 : 0}`;
+}
+
+// Split the data hash into a structural component (which items must
+// exist) and a value component (the numeric stats). Sync diffs that
+// only touch valueHash now flow through patchGeometry instead of
+// delete-then-add — eliminates the brief blank flash the user sees
+// when adjusting HP via the cc-info / monster-info panels.
+//
+// Anything that affects WHICH bubble items exist or HOW they're styled
+// at construction time goes into structureHash. Anything that's just a
+// number patched live via patchGeometry → valueHash.
+function structureHash(d: BubbleData): string {
+  const hpBar = d.maxHp > 0 ? "1" : "0";
+  const ac = d.ac != null ? "1" : "0";
+  const hidden = d.hide ? "1" : "0";
+  return `${hpBar}${ac}${hidden}`;
+}
+function valueHash(d: BubbleData): string {
+  return `${d.hp}|${d.maxHp}|${d.tempHp}|${d.ac == null ? "_" : d.ac}`;
+}
+
+function readEnabled(): boolean {
+  try {
+    const v = localStorage.getItem(LS_BUBBLES_ENABLED);
+    if (v === "0") return false;
+    if (v === "1") return true;
+  } catch {}
+  return true;
+}
+
+function readUserScale(): number {
+  try {
+    const v = localStorage.getItem(LS_BUBBLES_SCALE);
+    if (v) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0.3 && n < 3) return n;
+    }
+  } catch {}
+  return 1;
+}
+
+function readVerticalOffset(): number {
+  try {
+    const v = localStorage.getItem(LS_BUBBLES_VERTICAL_OFFSET);
+    if (v != null && v !== "") {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  } catch {}
+  return DEFAULT_VERTICAL_OFFSET;
+}
+
+function readPlayerThreshold(): number {
+  try {
+    const v = localStorage.getItem(LS_BUBBLES_PLAYER_THRESHOLD);
+    if (v != null && v !== "") {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
+    }
+  } catch {}
+  return DEFAULT_PLAYER_THRESHOLD;
+}
+
+/** Quantise a 0..1 ratio to the nearest ceiling step of size T/100.
+ *  Used for the player-side display ratio of locked tokens. T=0 →
+ *  return ratio unchanged. T=100 → ratio always rounded up to 1
+ *  (progress invisible). For 0 < T < 100, the next-ceiling step
+ *  matches the user's spec: HP must drop to or below NN% before
+ *  the player sees a step change. */
+function quantiseRatio(ratio: number, thresholdPercent: number): number {
+  if (thresholdPercent <= 0) return ratio;
+  const step = thresholdPercent / 100;
+  if (step >= 1) return ratio > 0 ? 1 : 0;
+  const stepped = Math.ceil(ratio / step) * step;
+  return Math.max(0, Math.min(1, stepped));
+}
+
+// Combat-active flag, cached so syncBubbles doesn't have to query
+// scene metadata on every tick. Refreshed on scene-ready and on
+// metadata-change events.
+let cachedCombatActive = false;
+function readCombatActive(meta: Record<string, unknown>): boolean {
+  const c = meta[COMBAT_STATE_KEY] as { inCombat?: boolean; preparing?: boolean } | undefined;
+  return !!(c?.inCombat || c?.preparing);
+}
+
+type ViewMode = "full" | "hidden" | "silhouette";
+
+/**
+ * Decide what bubble shape this client should draw for `d`.
+ *
+ *   "full"       — bar + text + AC (GM, owner of the token, or
+ *                  unlocked + visible-to-all)
+ *   "hidden"     — nothing (legacy GM-only `hide`, or locked + idle)
+ *   "silhouette" — bar only, with quantised ratio. No text, no AC.
+ *                  Used for locked tokens shown to players during
+ *                  prep / combat (excluding the player who owns
+ *                  the token).
+ *
+ * `ownsItem` — whether this client is the OBR-side owner of the
+ * token (createdUserId match). Owner gets the same view as DM so
+ * that DM-given owner permission lets the player see real numbers
+ * for "their" monster pet / ally etc.
+ */
+function computeViewMode(
+  d: BubbleData,
+  isGM: boolean,
+  inCombat: boolean,
+  ownsItem: boolean,
+  isBestiaryBound: boolean,
+): ViewMode {
+  if (isGM || ownsItem) return "full";
+  if (d.hide) return "hidden";
+  // Bestiary-bound monsters: when combat is preparing or active,
+  // ALWAYS show silhouette (HP bar progress visible, numbers + AC
+  // hidden) regardless of whether the DM has locked them. Out of
+  // combat they default to hidden so the canvas stays clean.
+  // This matches the "DM revealing combatants" affordance: combat
+  // starts → players SEE who's hurt without seeing exact HP.
+  if (isBestiaryBound) return inCombat ? "silhouette" : "hidden";
+  if (d.locked) return inCombat ? "silhouette" : "hidden";
+  return "full";
+}
+
+// --- Math helpers ------------------------------------------------------
+//
+// Reproduce the visible center of a token image accounting for
+// `image.grid.offset` (the image's anchor point), the image's own
+// dpi vs the scene's dpi, the item's per-axis scale, and rotation.
+// `tok.position` is where the OFFSET POINT lands in world coords —
+// not necessarily the center.
+
+function getImageCenter(image: Image, sceneDpi: number): Vector2 {
+  let p: Vector2 = { x: image.image.width / 2, y: image.image.height / 2 };
+  p = Math2.subtract(p, image.grid.offset);
+  p = Math2.multiply(p, sceneDpi / image.grid.dpi);
+  p = { x: p.x * image.scale.x, y: p.y * image.scale.y };
+  p = Math2.rotate(p, { x: 0, y: 0 }, image.rotation);
+  return Math2.add(p, image.position);
+}
+
+function getRenderedSize(image: Image, sceneDpi: number) {
+  const dpiRatio = sceneDpi / image.grid.dpi;
+  return {
+    width: Math.abs(image.image.width * dpiRatio * image.scale.x),
+    height: Math.abs(image.image.height * dpiRatio * image.scale.y),
+  };
+}
+
+// Image dimensions and visible centre at NATIVE (image.scale = 1).
+//
+// With SCALE inheritance on, the parent's scale.x/y is applied by the
+// renderer during attached-item drawing. We MUST size and position
+// the bubbles at the parent's native scale, otherwise the renderer's
+// applied scale double-stacks on top of our pre-scaled values.
+//
+// `getImageNativeCenter` returns the world position the image's
+// pixel-centre would be at if image.scale = 1 — i.e. parent.position
+// plus the dpi-adjusted (but unscaled) offset from anchor to centre.
+// For typical centre-anchored tokens this equals image.position.
+function getImageNativeSize(image: Image, sceneDpi: number) {
+  const dpiRatio = sceneDpi / image.grid.dpi;
+  return {
+    width: Math.abs(image.image.width * dpiRatio),
+    height: Math.abs(image.image.height * dpiRatio),
+  };
+}
+
+function getImageNativeCenter(image: Image, sceneDpi: number): Vector2 {
+  let p: Vector2 = { x: image.image.width / 2, y: image.image.height / 2 };
+  p = Math2.subtract(p, image.grid.offset);
+  p = Math2.multiply(p, sceneDpi / image.grid.dpi);
+  // NB: deliberately NOT multiplied by image.scale — the renderer
+  // applies that itself when SCALE inheritance is on.
+  p = Math2.rotate(p, { x: 0, y: 0 }, image.rotation);
+  return Math2.add(p, image.position);
+}
+
+// Polygon points for a rounded rectangle anchored at (0, 0) extending
+// into the +x / +y quadrant. `fill` ∈ [0, 1] produces a partial
+// rectangle ending in a rounded right edge — used for the HP bar's
+// filled portion.
+function roundedRectanglePoints(
+  width: number,
+  height: number,
+  radius: number,
+  fill = 1,
+  pointsInCorner = 10,
+): Vector2[] {
+  if (radius * 2 > height) radius = height / 2;
+  if (radius * 2 > width) radius = width / 2;
+
+  const arc = (cx: number, cy: number, fromAngle: number, toAngle: number): Vector2[] => {
+    const out: Vector2[] = [];
+    for (let i = 0; i <= pointsInCorner; i++) {
+      const t = i / pointsInCorner;
+      const a = fromAngle + (toAngle - fromAngle) * t;
+      out.push({ x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius });
+    }
+    return out;
+  };
+
+  if (fill >= 1) {
+    return [
+      ...arc(radius, radius, -Math.PI, -Math.PI / 2),                  // top-left
+      ...arc(width - radius, radius, -Math.PI / 2, 0),                 // top-right
+      ...arc(width - radius, height - radius, 0, Math.PI / 2),         // bottom-right
+      ...arc(radius, height - radius, Math.PI / 2, Math.PI),           // bottom-left
+    ];
+  }
+
+  const filledWidth = Math.max(0, Math.min(width, fill * width));
+  if (filledWidth <= 0) return [];
+  if (filledWidth <= radius) {
+    // Tiny sliver at critical HP — render a half-pill so the user
+    // still sees a small red blip.
+    return [
+      ...arc(radius, radius, -Math.PI, -Math.PI / 2),
+      { x: radius, y: 0 },
+      { x: radius, y: height },
+      ...arc(radius, height - radius, Math.PI / 2, Math.PI),
+    ];
+  }
+  return [
+    ...arc(radius, radius, -Math.PI, -Math.PI / 2),
+    { x: filledWidth - radius, y: 0 },
+    ...arc(filledWidth - radius, radius, -Math.PI / 2, 0),
+    ...arc(filledWidth - radius, height - radius, 0, Math.PI / 2),
+    { x: filledWidth - radius, y: height },
+    ...arc(radius, height - radius, Math.PI / 2, Math.PI),
+  ];
+}
+
+// Polygon points for a heraldic heater-shield outline anchored at
+// (0, 0) extending into +x / +y. The shield has gently rounded top
+// corners, vertical sides for the upper ~45%, then quadratic-bezier
+// curves converging to a point at the bottom-center. Pure geometry,
+// no styling — fed into `buildCurve().points()` like any other
+// closed polygon.
+function shieldPoints(W: number, H: number, segments = 14): Vector2[] {
+  const pts: Vector2[] = [];
+  const cornerR = Math.min(W, H) * 0.18;
+  const sideStraightBottom = H * 0.42;
+
+  // Top-left corner arc
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const a = -Math.PI + (Math.PI / 2) * t;
+    pts.push({
+      x: cornerR + Math.cos(a) * cornerR,
+      y: cornerR + Math.sin(a) * cornerR,
+    });
+  }
+  // Top-right corner arc
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const a = -Math.PI / 2 + (Math.PI / 2) * t;
+    pts.push({
+      x: W - cornerR + Math.cos(a) * cornerR,
+      y: cornerR + Math.sin(a) * cornerR,
+    });
+  }
+  // Right side straight to (W, sideStraightBottom)
+  pts.push({ x: W, y: sideStraightBottom });
+  // Quadratic bezier from (W, sideStraightBottom) → (W/2, H), bowing inward
+  const segs2 = segments * 2;
+  for (let i = 1; i <= segs2; i++) {
+    const t = i / segs2;
+    const u = 1 - t;
+    const p0 = { x: W, y: sideStraightBottom };
+    const p1 = { x: W * 0.85, y: H * 0.92 };
+    const p2 = { x: W / 2, y: H };
+    pts.push({
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y,
+    });
+  }
+  // Mirror curve from bottom-point back up to (0, sideStraightBottom)
+  for (let i = 1; i <= segs2; i++) {
+    const t = i / segs2;
+    const u = 1 - t;
+    const p0 = { x: W / 2, y: H };
+    const p1 = { x: W * 0.15, y: H * 0.92 };
+    const p2 = { x: 0, y: sideStraightBottom };
+    pts.push({
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y,
+    });
+  }
+  // Curve auto-closes from (0, sideStraightBottom) back to first arc point
+  return pts;
+}
+
+// SKSL shader for the HP-bar overlay (animation only, on top of the
+// gray-bg + red-fill curves stacked underneath). Renders animated
+// "blood cells" drifting left → right inside the filled portion
+// of the bar. Driven by the `iTime` uniform that the animation
+// timer ticks.
+const HP_SHIMMER_SKSL = `
+uniform float iTime;
+uniform float2 iSize;
+uniform float ratio;
+
+float hash21(float2 p) {
+  p = fract(p * float2(123.34, 234.45));
+  p += dot(p, p + 34.45);
+  return fract(p.x * p.y);
+}
+
+half4 main(float2 coord) {
+  float2 size = iSize;
+
+  // Bail past the filled portion entirely.
+  float fillEnd = ratio * size.x;
+  if (coord.x > fillEnd) return half4(0);
+
+  // Rounded-end clipping. Both bar ends and the right edge of the
+  // partial fill are semicircles of radius size.y / 2.
+  float r = size.y * 0.5;
+  float2 cc;
+  cc.x = clamp(coord.x, r, max(r, fillEnd - r));
+  cc.y = clamp(coord.y, r, size.y - r);
+  float dist = distance(coord, cc);
+  if (dist > r) return half4(0);
+  float edge = 1.0 - smoothstep(r - 1.5, r, dist);
+
+  // Slow-drifting "blood cells" — 7 of them, each with its own
+  // y-position, radius, speed, and phase, looping across the bar
+  // with a 2-r overshoot so they enter / exit smoothly.
+  float cells = 0.0;
+  for (int i = 0; i < 7; i++) {
+    float fi = float(i);
+    float s1 = hash21(float2(fi, 1.7));
+    float s2 = hash21(float2(fi, 4.3));
+    float s3 = hash21(float2(fi, 9.1));
+
+    float speed = mix(size.y * 0.35, size.y * 0.75, s1);
+    float cy = mix(size.y * 0.25, size.y * 0.75, s2);
+    float cr = mix(size.y * 0.20, size.y * 0.34, s3);
+
+    float cycle = size.x + cr * 4.0;
+    float cx = mod(iTime * speed + s1 * cycle, cycle) - cr * 2.0;
+
+    float d = length(float2(coord.x - cx, coord.y - cy));
+    cells += smoothstep(cr, cr * 0.35, d);
+  }
+
+  float ripple = sin(coord.x * 0.05 - iTime * 1.2) * 0.04;
+  float base = 0.72;
+  float intensity = clamp(base + cells * 0.45 + ripple, 0.0, 1.0);
+  intensity = clamp(intensity + (1.0 - coord.y / size.y) * 0.08, 0.0, 1.0);
+
+  float cellMix = clamp(cells * 0.5, 0.0, 1.0);
+  half3 deepRed   = half3(0.78, 0.05, 0.08);
+  half3 brightRed = half3(1.00, 0.30, 0.22);
+  half3 color = mix(deepRed, brightRed, cellMix);
+
+  float alpha = clamp(intensity * 0.92, 0.0, 1.0) * edge;
+  return half4(color * intensity, alpha);
+}
+`;
+
+// --- Per-token rendering state -----------------------------------------
+//
+// Each token may have up to 6 attached local items:
+//   bgId / fillId / textId   — HP bar (3 items)
+//   acBgId / acTextId        — AC stat bubble (2 items)
+//   tempBgId / tempTextId    — Temp HP stat bubble (2 items)
+interface BubbleEntry {
+  ids: string[];                  // every local item id we own for this token
+  shimmerIds: string[];           // every shader Effect we own (timer ticks iTime on these)
+  hash: string;                   // matches dataHash(data); kept for diagnostics
+  structureHash: string;          // matches structureHash(data) — controls rebuild
+  valueHash: string;              // matches valueHash(data) — value-only diffs route to patchGeometry
+  geomKey: string;                // matches the layout signature (position + width)
+  data: BubbleData;               // cached so the bounds-poll can re-layout without re-reading the token
+  statsVisible: boolean;          // cached for patchGeometry → buildContext path
+  // Last barWidth/barHeight the shimmer Effect was built with. OBR's
+  // renderer ignores `width/height` field updates for Effect items
+  // sent through the partial-update path (verified via the bubble
+  // diagnostic output: post-resize commit, `curveBounds.w` updated
+  // but `effectBounds.w` stayed at creation size). When a resize
+  // commit changes these, we have to delete and re-add the shimmer
+  // — this field lets the patch-vs-rebuild branch detect that.
+  shimmerSize?: { w: number; h: number };
+}
+const entries = new Map<string, BubbleEntry>();
+
+let role: "GM" | "PLAYER" = "PLAYER";
+let myPlayerId = "";  // own id — used to detect token ownership for full-bar override
+let unsubs: Array<() => void> = [];
+let inSync = false;
+let queuedSync = false;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+// Scene DPI cached at setup + on grid changes so the bounds-poll
+// doesn't have to await `OBR.scene.grid.getDpi()` every frame.
+let cachedSceneDpi = 150;
+
+// --- Animation timer for shimmer effects ----------------------------------
+// OBR Effect items don't auto-update their uniforms, so we drive `iTime`
+// from a single throttled interval. One batched updateItems per tick
+// updates every active shimmer — cheaper than per-token calls.
+let animationTimer: ReturnType<typeof setInterval> | null = null;
+let animationStart = Date.now();
+
+function ensureAnimationTimer(): void {
+  if (animationTimer) return;
+  let any = false;
+  for (const e of entries.values()) if (e.shimmerIds.length) { any = true; break; }
+  if (!any) return;
+  animationStart = Date.now();
+  animationTimer = setInterval(() => {
+    const ids: string[] = [];
+    for (const e of entries.values()) ids.push(...e.shimmerIds);
+    if (ids.length === 0) {
+      stopAnimationTimer();
+      return;
+    }
+    const t = (Date.now() - animationStart) / 1000;
+    OBR.scene.local.updateItems(ids, (drafts) => {
+      for (const d of drafts) {
+        const eff = d as any;
+        if (!Array.isArray(eff.uniforms)) continue;
+        let found = false;
+        for (const u of eff.uniforms) {
+          if (u.name === "iTime") { u.value = t; found = true; break; }
+        }
+        if (!found) eff.uniforms.push({ name: "iTime", value: t });
+      }
+    }).catch((e) => console.warn("[bubbles] timer updateItems failed", e));
+  }, 60);
+}
+
+function stopAnimationTimer(): void {
+  if (animationTimer) {
+    clearInterval(animationTimer);
+    animationTimer = null;
+  }
+}
+
+let scheduleSyncCount = 0;
+function scheduleSync(): void {
+  scheduleSyncCount++;
+  if (pendingTimer) return;
+  // Debounce reduced from 60 → 16 ms (one frame). The original 60 ms
+  // was set when a single onChange could spam many events during a
+  // resize gesture, but the upstream cluster has since coalesced
+  // those. For HP/AC edits dispatched from the cc-info / monster-info
+  // panels, every saved 45 ms is felt as snappier feedback on the
+  // bubbles bar above the token.
+  pendingTimer = setTimeout(() => {
+    pendingTimer = null;
+    syncBubbles().catch((e) => console.warn("[obr-suite/bubbles] sync failed", e));
+  }, 16);
+}
+
+// (Earlier rounds attempted a requestAnimationFrame `getItemBounds`
+// poll here to drive live updates during a token-resize gesture.
+// Empirically `getItemBounds` ALSO only updates on commit — same as
+// `items.onChange` — so the poll fired only at the same instant the
+// onChange handler did, with no benefit. The current solution uses
+// SCALE attachment-inheritance instead: the renderer applies the
+// parent's transform to attached items in real time, so the bar
+// visually scales during the drag without any polling. On commit
+// `items.onChange` fires and patchGeometry runs once for any
+// permanent geometry shift.)
+
+// --- Layout computation ------------------------------------------------
+//
+// Every dimension here scales with the token's actual rendered size on
+// the map. The reference is `Math.min(rendered_w, rendered_h) /
+// sceneDpi` — a default 1-cell token has scale 1.0, a 0.5-cell
+// familiar has scale 0.5, a 3-cell ogre has scale 3.0, etc. The
+// user's per-client preference (LS_BUBBLES_SCALE, default 1) is
+// multiplied on top so they can globally enlarge / shrink.
+//
+// Without this scaling, a 20-px-tall bar swamps a 30-px-wide
+// familiar but is invisible on a giant. With it, the bar always
+// occupies roughly the same fraction of the token's footprint.
+
+interface BarLayout {
+  /** anchor at the token's bottom-center in scene coords */
+  origin: Vector2;
+  /** bar's TOP-LEFT in scene coords (already RENDERED-scale-aware) */
+  barOrigin: Vector2;
+  /** bar width in scene units (RENDERED — already includes tokenScale) */
+  barWidth: number;
+  /** scaled bar height (RENDERED) */
+  barHeight: number;
+  /** scaled bar corner radius (= barHeight / 2 for the capsule shape) */
+  barCornerRadius: number;
+  /** scaled bar text font size */
+  barFontSize: number;
+  /** scaled HP-bar text vertical offset (the upstream's TEXT_VERTICAL_OFFSET) */
+  barTextOffset: number;
+  /** scaled stat-bubble diameter */
+  diameter: number;
+  /** scaled stat-bubble font size for ≤2 digits */
+  bubbleFontSize: number;
+  /** scaled stat-bubble font size for 3-digit values */
+  bubbleFontSizeTight: number;
+  /** scaled stat-bubble text vertical offset */
+  bubbleTextOffset: number;
+  /** AC stat bubble CENTER (Shape CIRCLE position semantics) — null if no AC */
+  acCenter: Vector2 | null;
+  /** Temp HP stat bubble CENTER — null if tempHp == 0 */
+  tempCenter: Vector2 | null;
+  /** parent token's image-scale-equivalent (= rendered_w / sceneDpi).
+   *  Kept for diagnostic logging and the geometryKey hash. */
+  tokenScale: number;
+}
+
+// Layout computation from RENDERED metrics (centre + width/height in
+// scene units, both already including image.scale). With SCALE
+// attachment-inheritance disabled for all bubble items, geometry IS
+// the visual — no renderer-side multiplication. So we bake
+// `parent.scale` (= tokenScale) into every dimension here.
+function computeLayoutFromMetrics(
+  centerX: number,
+  centerY: number,
+  renderedWidth: number,
+  renderedHeight: number,
+  sceneDpi: number,
+  data: BubbleData,
+  userScale: number,
+  verticalOffset: number,
+): BarLayout {
+  // Token-size-proportional scale. A standard 1-cell token (rendered
+  // width = sceneDpi worth of scene units) yields tokenScale = 1.0;
+  // a 0.5-cell familiar 0.5; a 3-cell ogre 3.0. Min(width, height)
+  // keeps very wide / tall token images from blowing up the bar past
+  // their narrower dimension.
+  const tokenScale = Math.max(0.05, Math.min(renderedWidth, renderedHeight) / sceneDpi);
+  const s = tokenScale * userScale;
+
+  const barHeight = BAR_HEIGHT * s;
+  const barPadding = BAR_PADDING * s;
+  const barCornerRadius = barHeight / 2;
+  const barFontSize = BAR_FONT_SIZE * s;
+  const barTextOffset = TEXT_VERTICAL_OFFSET * s;
+  const diameter = DIAMETER * s;
+  const bubbleFontSize = BUBBLE_FONT_SIZE * s;
+  const bubbleFontSizeTight = BUBBLE_FONT_SIZE_TIGHT * s;
+  const bubbleTextOffset = TEXT_VERTICAL_OFFSET * s;
+
+  // verticalOffset is in scene-coord pixels (negative = up). Applied to
+  // the bubble cluster's anchor so it shifts as a single unit instead
+  // of per-element. Default -20 lifts the whole row 20 px above the
+  // token's bottom edge so it doesn't visually fight with the OBR
+  // token name label that hangs just below.
+  const origin: Vector2 = { x: centerX, y: centerY + renderedHeight / 2 + verticalOffset };
+
+  // Bar inset by `barPadding` on each side; sits 2*s scene units
+  // above the bottom edge so there's a small gap to the token edge.
+  const barWidth = Math.max(barHeight, renderedWidth - barPadding * 2);
+  const barOrigin: Vector2 = {
+    x: origin.x - barWidth / 2,
+    y: origin.y - barHeight - 2 * s,
+  };
+
+  // Stat bubbles sit right-aligned ABOVE the bar's top edge, with the
+  // rightmost bubble nestled at the token's right edge. All gaps and
+  // diameters scale with the token, so a tiny familiar's bubbles
+  // proportionally hug the bar instead of looming over the top.
+  const showHp = data.maxHp > 0;
+  const bubbleGap = 4 * s;
+  const bubbleSpacing = 8 * s;
+  const edgeInset = 2 * s;
+  const bubbleBottomY = barOrigin.y - bubbleGap;
+  const bubbleCenterY = bubbleBottomY - diameter / 2;
+
+  let acCenter: Vector2 | null = null;
+  let tempCenter: Vector2 | null = null;
+
+  let nextRightEdge = origin.x + renderedWidth / 2 - edgeInset;
+  if (data.ac != null) {
+    acCenter = { x: nextRightEdge - diameter / 2, y: bubbleCenterY };
+    nextRightEdge -= diameter + bubbleSpacing;
+  }
+  if (data.tempHp > 0 && showHp) {
+    tempCenter = { x: nextRightEdge - diameter / 2, y: bubbleCenterY };
+  }
+
+  void showHp;
+  return {
+    origin, barOrigin, barWidth,
+    barHeight, barCornerRadius, barFontSize, barTextOffset,
+    diameter, bubbleFontSize, bubbleFontSizeTight, bubbleTextOffset,
+    acCenter, tempCenter,
+    tokenScale,
+  };
+}
+
+function computeLayout(
+  image: Image,
+  sceneDpi: number,
+  data: BubbleData,
+  userScale: number,
+  verticalOffset: number,
+): BarLayout {
+  const center = getImageCenter(image, sceneDpi);
+  const size = getRenderedSize(image, sceneDpi);
+  return computeLayoutFromMetrics(
+    center.x, center.y, size.width, size.height,
+    sceneDpi, data, userScale, verticalOffset,
+  );
+}
+
+function geometryKey(L: BarLayout, has: { hp: boolean; ac: boolean; temp: boolean }): string {
+  // Includes the scaled dimensions so a token-scale change
+  // triggers a full rebuild — Curve polygon points are baked in at
+  // create time, so width / height changes can't be patched
+  // position-only.
+  const parts = [
+    `hp:${has.hp ? `${L.barOrigin.x.toFixed(2)},${L.barOrigin.y.toFixed(2)},${L.barWidth.toFixed(2)},${L.barHeight.toFixed(2)}` : "_"}`,
+    `ac:${has.ac && L.acCenter ? `${L.acCenter.x.toFixed(2)},${L.acCenter.y.toFixed(2)},${L.diameter.toFixed(2)}` : "_"}`,
+    `tp:${has.temp && L.tempCenter ? `${L.tempCenter.x.toFixed(2)},${L.tempCenter.y.toFixed(2)},${L.diameter.toFixed(2)}` : "_"}`,
+  ];
+  return parts.join("|");
+}
+
+// --- Item builders -----------------------------------------------------
+
+interface BuildContext {
+  token: Item;
+  visible: boolean;
+}
+
+function buildBarBg(ctx: BuildContext, L: BarLayout, statsVisible: boolean): any {
+  const color = statsVisible ? HP_BG : HP_BG_HIDDEN;
+  return buildCurve()
+    .fillColor(color)
+    .fillOpacity(BG_OPACITY)
+    .strokeOpacity(0)
+    .strokeWidth(0)
+    .tension(0)
+    .closed(true)
+    .points(roundedRectanglePoints(L.barWidth, L.barHeight, L.barCornerRadius))
+    .position(L.barOrigin)
+    .layer("ATTACHMENT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(10000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "hp-bg"))
+    .build();
+}
+
+function buildBarFill(ctx: BuildContext, L: BarLayout, ratio: number): any {
+  return buildCurve()
+    .fillColor(HP_FILL)
+    .fillOpacity(FILL_OPACITY)
+    .strokeOpacity(0)
+    .strokeWidth(0)
+    .tension(0)
+    .closed(true)
+    .points(roundedRectanglePoints(L.barWidth, L.barHeight, L.barCornerRadius, ratio))
+    .position(L.barOrigin)
+    .layer("ATTACHMENT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(20000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "hp-fill"))
+    .build();
+}
+
+// Shimmer overlay — Effect rendered on top of the static fill curve.
+// Earlier rounds used effectType ATTACHMENT + blendMode PLUS, but
+// neither was reliably visible. STANDALONE + SRC_OVER is the same
+// pattern OBR's lighting uses and renders the shader as a normal
+// alpha-blended overlay. The shader (HP_SHIMMER_SKSL) outputs
+// half4(rgb, alpha) so SRC_OVER picks up its colors directly.
+function buildHpShimmer(ctx: BuildContext, L: BarLayout, ratio: number): any {
+  // RENDERED dimensions + SCALE inheritance disabled. Geometry IS
+  // the visual. Resize commits go through the `shimmerRebuild` path
+  // in syncBubbles (delete + re-add) since OBR's renderer doesn't
+  // propagate width/height field updates for Effects through the
+  // partial-update path.
+  return buildEffect()
+    .effectType("STANDALONE")
+    .blendMode("SRC_OVER")
+    .width(L.barWidth)
+    .height(L.barHeight)
+    .sksl(HP_SHIMMER_SKSL)
+    .uniforms([
+      { name: "iTime", value: 0 },
+      { name: "iSize", value: { x: L.barWidth, y: L.barHeight } },
+      { name: "ratio", value: ratio },
+    ])
+    .position(L.barOrigin)
+    .layer("ATTACHMENT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(25000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "hp-shimmer"))
+    .build();
+}
+
+
+function buildBarText(ctx: BuildContext, L: BarLayout, data: BubbleData): any {
+  const text = `${data.hp}/${data.maxHp}${data.tempHp > 0 ? ` +${data.tempHp}` : ""}`;
+  // Stroke width tracks bar height too so the text outline doesn't
+  // dominate the glyphs on a tiny familiar (was a fixed 1.5 px →
+  // looked like a black blob at small scale).
+  const strokeWidth = Math.max(0.4, L.barHeight * 0.075);
+  return buildText()
+    .plainText(text)
+    .textType("PLAIN")
+    .textAlign("CENTER")
+    .textAlignVertical("MIDDLE")
+    .fontFamily(FONT_FAMILY)
+    .fontSize(L.barFontSize)
+    .fontWeight(700)
+    .fillColor("#ffffff")
+    .fillOpacity(1)
+    .strokeColor("#000000")
+    .strokeOpacity(0.7)
+    .strokeWidth(strokeWidth)
+    .lineHeight(0.95)
+    .width(L.barWidth)
+    .height(L.barHeight)
+    .position({ x: L.barOrigin.x, y: L.barOrigin.y + L.barTextOffset })
+    .layer("TEXT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(30000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "hp-text"))
+    .build();
+}
+
+function buildStatBubbleBg(ctx: BuildContext, L: BarLayout, center: Vector2, color: string): any {
+  // Shape CIRCLE position is the bubble's CENTER (verified empirically
+  // against the upstream's positioning math).
+  return buildShape()
+    .shapeType("CIRCLE")
+    .width(L.diameter)
+    .height(L.diameter)
+    .fillColor(color)
+    .fillOpacity(BG_OPACITY)
+    .strokeColor(color)
+    .strokeOpacity(0)
+    .strokeWidth(0)
+    .position(center)
+    .layer("ATTACHMENT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(15000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "temp-bg"))
+    .build();
+}
+
+// AC shield — replaces the CIRCLE Shape with a Curve outlined as a
+// heraldic heater shield. Same diameter footprint as the circle so
+// the layout math doesn't shift; the shape inside the bbox is just
+// the shield outline. A thin white stroke gives the rim a touch of
+// shine.
+function buildAcShield(ctx: BuildContext, L: BarLayout, center: Vector2, color: string): any {
+  const W = L.diameter;
+  const H = L.diameter;
+  return buildCurve()
+    .fillColor(color)
+    .fillOpacity(BG_OPACITY)
+    .strokeColor("#ffffff")
+    .strokeOpacity(0.45)
+    .strokeWidth(Math.max(0.6, L.diameter * 0.04))
+    .tension(0)
+    .closed(true)
+    .points(shieldPoints(W, H))
+    .position({ x: center.x - W / 2, y: center.y - H / 2 })
+    .layer("ATTACHMENT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(15000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, "ac-shield"))
+    .build();
+}
+
+// Stat-bubble text overlay — used for both AC and Temp HP.
+// `role` distinguishes the two so patchGeometry can dispatch them
+// differently (AC text gets an upward Y nudge to compensate for
+// the shield outline's visual centroid being above the geometric
+// center of the bbox; Temp HP sits in a centered circle and
+// doesn't need that nudge). Stroke is dropped on very small icons
+// where a 0.4-px outline reads as a black blob.
+function buildStatBubbleText(ctx: BuildContext, L: BarLayout, center: Vector2, value: number, role: "ac-text" | "temp-text"): any {
+  const text = value.toString();
+  const fontSize = text.length >= 3 ? L.bubbleFontSizeTight : L.bubbleFontSize;
+  const strokeWidth = L.diameter < 20 ? 0 : Math.max(0.4, L.diameter * 0.05);
+  // Shield's visual centroid sits above its geometric center
+  // (because the bottom point is thin); nudge AC text up by 8%
+  // of the bbox so the number looks centered on the shield body.
+  const yShift = role === "ac-text" ? -L.diameter * 0.08 : 0;
+  return buildText()
+    .plainText(text.length > 3 ? "…" : text)
+    .textType("PLAIN")
+    .textAlign("CENTER")
+    .textAlignVertical("MIDDLE")
+    .fontFamily(FONT_FAMILY)
+    .fontSize(fontSize)
+    .fontWeight(700)
+    .fillColor("#ffffff")
+    .fillOpacity(1)
+    .strokeColor("#000000")
+    .strokeOpacity(0.7)
+    .strokeWidth(strokeWidth)
+    .lineHeight(0.95)
+    .width(L.diameter)
+    .height(L.diameter)
+    .position({
+      x: center.x - L.diameter / 2,
+      y: center.y - L.diameter / 2 + L.bubbleTextOffset + yShift,
+    })
+    .layer("TEXT")
+    .attachedTo(ctx.token.id)
+    .locked(true)
+    .disableHit(true)
+    .visible(ctx.visible)
+    .disableAutoZIndex(true)
+    .zIndex(25000)
+    .disableAttachmentBehavior(DISABLE_INHERIT)
+    .metadata(bubbleMeta(ctx.token.id, role))
+    .build();
+}
+
+// --- Sync --------------------------------------------------------------
+
+interface Wanted {
+  tok: Image;
+  data: BubbleData;
+  viewMode: ViewMode;
+  layout: BarLayout;
+  hash: string;
+  structureHash: string;
+  valueHash: string;
+  geomKey: string;
+  statsVisible: boolean;
+}
+
+// Geometry-only in-place update — used when the token's data
+// (HP / AC / hide / temp HP) is unchanged but its position or
+// scale shifted. Avoids the delete + re-add cycle that made
+// resize feel "release-only" before: the user grabs the corner
+// handle, OBR fires items.onChange repeatedly during the drag,
+// and we patch each shimmer / shield / text item's position +
+// dimensions + font size in a single batched updateItems call.
+// `iTime` for shimmers is left alone — the animation timer
+// keeps ticking it independently.
+//
+// Dispatches by the `BUBBLE_ROLE_KEY` metadata each builder
+// stamps onto its item — that role tells us which fields to
+// update for that item type.
+async function patchGeometry(patches: Array<{ entry: BubbleEntry; w: Wanted }>): Promise<void> {
+  if (patches.length === 0) return;
+
+  const wantedByItemId = new Map<string, Wanted>();
+  const allIds: string[] = [];
+  for (const { entry, w } of patches) {
+    for (const id of entry.ids) {
+      wantedByItemId.set(id, w);
+      allIds.push(id);
+    }
+  }
+  if (allIds.length === 0) return;
+
+  await OBR.scene.local.updateItems(allIds, (drafts) => {
+    for (const d of drafts) {
+      const w = wantedByItemId.get(d.id);
+      if (!w) continue;
+      const role = (d.metadata as any)?.[BUBBLE_ROLE_KEY] as BubbleRole | undefined;
+      if (!role) continue;
+      const L = w.layout;
+      const D = L.diameter;
+      const da = d as any;
+      switch (role) {
+        case "hp-bg": {
+          da.position = L.barOrigin;
+          da.points = roundedRectanglePoints(L.barWidth, L.barHeight, L.barCornerRadius);
+          break;
+        }
+        case "hp-fill": {
+          const ratio = Math.max(0, Math.min(1, w.data.hp / Math.max(1, w.data.maxHp)));
+          da.position = L.barOrigin;
+          da.points = roundedRectanglePoints(L.barWidth, L.barHeight, L.barCornerRadius, ratio);
+          break;
+        }
+        case "hp-shimmer": {
+          // Effect uses RENDERED dimensions + SCALE inheritance off.
+          // Position and uniforms get partial-update propagation OK;
+          // only width/height field changes are silently dropped by
+          // OBR's renderer — those are handled separately via the
+          // `shimmerRebuild` path in syncBubbles.
+          const ratio = Math.max(0, Math.min(1, w.data.hp / Math.max(1, w.data.maxHp)));
+          da.position = L.barOrigin;
+          da.width = L.barWidth;
+          da.height = L.barHeight;
+          if (Array.isArray(da.uniforms)) {
+            for (const u of da.uniforms) {
+              if (u.name === "iSize") u.value = { x: L.barWidth, y: L.barHeight };
+              else if (u.name === "ratio") u.value = ratio;
+            }
+          }
+          break;
+        }
+        case "hp-text": {
+          da.position = { x: L.barOrigin.x, y: L.barOrigin.y + L.barTextOffset };
+          if (da.text) {
+            // Replace the entire `text` object rather than mutating
+            // its fields. OBR's renderer drops field-level mutations
+            // (`da.text.plainText = "..."`) silently when the new
+            // value happens to match a previously-built value — so
+            // `66 → 20 → 66` would update the curve but leave the
+            // text stuck at "20/66". Reassigning the whole object
+            // forces the partial-update path to ship the change.
+            const newText = `${w.data.hp}/${w.data.maxHp}${w.data.tempHp > 0 ? ` +${w.data.tempHp}` : ""}`;
+            da.text = {
+              ...da.text,
+              width: L.barWidth,
+              height: L.barHeight,
+              plainText: newText,
+              style: {
+                ...(da.text.style ?? {}),
+                fontSize: L.barFontSize,
+                strokeWidth: Math.max(0.4, L.barHeight * 0.075),
+              },
+            };
+          }
+          break;
+        }
+        case "ac-shield": {
+          if (L.acCenter) {
+            da.position = { x: L.acCenter.x - D / 2, y: L.acCenter.y - D / 2 };
+            da.points = shieldPoints(D, D);
+            da.style = { ...(da.style ?? {}), strokeWidth: Math.max(0.6, D * 0.04) };
+          }
+          break;
+        }
+        case "ac-text": {
+          if (L.acCenter) {
+            const newText = w.data.ac != null ? String(w.data.ac) : "";
+            const fs = newText.length >= 3 ? L.bubbleFontSizeTight : L.bubbleFontSize;
+            const yShift = -D * 0.08;
+            da.position = {
+              x: L.acCenter.x - D / 2,
+              y: L.acCenter.y - D / 2 + L.bubbleTextOffset + yShift,
+            };
+            if (da.text) {
+              // Same reason as hp-text above: replace the whole text
+              // object to bypass OBR's silent-drop-on-stale-mutation.
+              da.text = {
+                ...da.text,
+                plainText: newText,
+                width: D,
+                height: D,
+                style: {
+                  ...(da.text.style ?? {}),
+                  fontSize: fs,
+                  strokeWidth: D < 20 ? 0 : Math.max(0.4, D * 0.05),
+                },
+              };
+            }
+          }
+          break;
+        }
+        case "temp-bg": {
+          if (L.tempCenter) {
+            da.position = L.tempCenter;
+            da.width = D;
+            da.height = D;
+          }
+          break;
+        }
+        case "temp-text": {
+          if (L.tempCenter) {
+            const txt: string = da.text?.plainText ?? "";
+            const fs = txt.length >= 3 ? L.bubbleFontSizeTight : L.bubbleFontSize;
+            da.position = {
+              x: L.tempCenter.x - D / 2,
+              y: L.tempCenter.y - D / 2 + L.bubbleTextOffset,
+            };
+            if (da.text) {
+              da.text.width = D;
+              da.text.height = D;
+              if (da.text.style) {
+                da.text.style.fontSize = fs;
+                da.text.style.strokeWidth = D < 20 ? 0 : Math.max(0.4, D * 0.05);
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+  }, true).catch((e) => console.warn("[obr-suite/bubbles] patchGeometry failed", e));
+}
+
+async function syncBubbles(): Promise<void> {
+  if (inSync) {
+    queuedSync = true;
+    return;
+  }
+  inSync = true;
+  try {
+    if (!readEnabled()) {
+      await clearAll();
+      return;
+    }
+
+    let allItems: Item[];
+    try { allItems = await OBR.scene.items.getItems(); }
+    catch { return; }
+
+    // Refresh cachedSceneDpi opportunistically every sync — most of the
+    // time the value is stable, but a scene with a non-default grid
+    // can change it. The bounds-poll reads from `cachedSceneDpi`
+    // without awaiting, so this keeps it warm.
+    try { cachedSceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+    const sceneDpi = cachedSceneDpi;
+
+    const userScale = readUserScale();
+    const verticalOffset = readVerticalOffset();
+    const playerThreshold = readPlayerThreshold();
+    // Refresh the cached combat-active flag at sync time so a player
+    // who joins during combat picks up the right view mode without
+    // waiting for the next metadata-change event.
+    try {
+      const meta = await OBR.scene.getMetadata();
+      cachedCombatActive = readCombatActive(meta);
+    } catch {}
+    const isGM = role === "GM";
+
+    const wanted = new Map<string, Wanted>();
+    for (const it of allItems) {
+      // Match upstream — Character / Mount / Prop layers all show bubbles.
+      if (it.layer !== "CHARACTER" && it.layer !== "MOUNT" && it.layer !== "PROP") continue;
+      if (!isImage(it)) continue;
+      // Per-suite gating: only render bubbles for tokens explicitly
+      // bound to a character card or a bestiary monster. Avoids
+      // accidentally bubble-ifying random NPC art or terrain props
+      // that happen to carry leftover bubbles metadata from a
+      // previous bind.
+      const meta = (it.metadata as any) || {};
+      const hasCc = typeof meta[CC_BIND_KEY] === "string" && meta[CC_BIND_KEY];
+      const hasBestiary = typeof meta[BESTIARY_SLUG_KEY] === "string" && meta[BESTIARY_SLUG_KEY];
+      if (!hasCc && !hasBestiary) continue;
+      const d = readBubbleData(it);
+      if (!d) continue;
+      // OBR's "Give Owner" sets `createdUserId` on the item to the
+      // chosen player. Owner gets the same full bar a DM sees.
+      const ownsItem = !!myPlayerId && (it as any).createdUserId === myPlayerId;
+      const viewMode = computeViewMode(d, isGM, cachedCombatActive, ownsItem, !!hasBestiary);
+      if (viewMode === "hidden") continue;
+
+      // Silhouette mode quantises the displayed HP ratio for players
+      // (default step = 25%). We mutate `effectiveData.hp` so every
+      // downstream build/patch path sees the quantised ratio without
+      // having to know about the threshold logic.
+      let effectiveData = d;
+      if (viewMode === "silhouette" && d.maxHp > 0) {
+        const q = quantiseRatio(d.hp / d.maxHp, playerThreshold);
+        effectiveData = { ...d, hp: Math.round(q * d.maxHp), tempHp: 0 };
+      }
+
+      const statsVisible = !d.hide;
+      const layout = computeLayout(it, sceneDpi, effectiveData, userScale, verticalOffset);
+      // Silhouette suppresses AC and the temp bubble entry. The
+      // geometryKey reflects what items will exist so a viewMode
+      // flip drives a structure-rebuild instead of slipping
+      // through patchGeometry.
+      const has = {
+        hp: effectiveData.maxHp > 0,
+        ac: viewMode === "silhouette" ? false : (d.ac != null),
+        temp: effectiveData.tempHp > 0 && effectiveData.maxHp > 0,
+      };
+      wanted.set(it.id, {
+        tok: it,
+        data: effectiveData,
+        viewMode,
+        layout,
+        hash: dataHash(effectiveData),
+        structureHash: structureHash(effectiveData) + ":" + viewMode,
+        valueHash: valueHash(effectiveData),
+        geomKey: geometryKey(layout, has),
+        statsVisible,
+      });
+    }
+
+    // Drop bubbles for tokens that lost data or were removed.
+    const orphans: string[] = [];
+    for (const [tokId, e] of entries) {
+      if (!wanted.has(tokId)) {
+        orphans.push(...e.ids);
+        entries.delete(tokId);
+      }
+    }
+    if (orphans.length) {
+      await OBR.scene.local.deleteItems(orphans).catch((err) =>
+        console.warn("[obr-suite/bubbles] delete orphans failed", err),
+      );
+    }
+
+    // For each wanted: rebuild on data hash change OR geometry change.
+    // Earlier rounds tried position-only patches on geometry change,
+    // but the Curve's polygon points are baked in at create time —
+    // patching position alone makes the bar appear "anchored at its
+    // bottom-left" because position shifts but width/shape doesn't.
+    // Full rebuild on width change keeps the visual correct.
+    const rebuildIds: string[] = [];
+    const toAdd: any[] = [];
+    // Tokens whose data is unchanged but whose geometry shifted
+    // (drag, resize, scale change). Patched in-place via
+    // patchGeometry — keeps the live update during a token resize
+    // gesture instead of the user only seeing the new size on
+    // mouse-release.
+    const geomPatches: Array<{ entry: BubbleEntry; w: Wanted }> = [];
+    // Effects need a delete + re-add round-trip on size change because
+    // OBR's renderer doesn't propagate `width / height` updates for
+    // Effect items via the partial-update path. Curves (`points`) and
+    // Shapes / Texts patch in place fine — only the shimmer is broken.
+    const shimmerRebuildIds: string[] = [];
+    const shimmerToAdd: any[] = [];
+
+    for (const [tokId, w] of wanted) {
+      const existing = entries.get(tokId);
+      // Fast path: nothing to do.
+      if (
+        existing &&
+        existing.structureHash === w.structureHash &&
+        existing.valueHash === w.valueHash &&
+        existing.geomKey === w.geomKey
+      ) continue;
+
+      // Structural change (HP bar appears/disappears, AC appears/
+      // disappears, hide-mode toggles) → full rebuild. These change
+      // WHICH items exist or HOW they're styled at construction time.
+      if (!existing || existing.structureHash !== w.structureHash) {
+        if (existing) rebuildIds.push(...existing.ids);
+        // fall through to the build-and-add block below
+      } else {
+        // Same structure — value and/or geometry changed. Curves /
+        // shapes / texts patch in place via patchGeometry (HP fill
+        // ratio, plainText, position, font sizes). No delete-and-add
+        // flicker for the bar itself.
+        //
+        // The HP-shimmer Effect is the exception: OBR's renderer
+        // drops `width / height` AND `uniforms.ratio` updates sent
+        // through the partial-update path, so the shader keeps
+        // rendering at the OLD ratio even though the curve underneath
+        // has the NEW length — resulting in a brief flash of the old
+        // length and a stuck shader at a wrong fill. Whenever the
+        // value or size changed, we rebuild ONLY the shimmer
+        // (delete + re-add). The bar curves stay put.
+        const newW = w.layout.barWidth;
+        const newH = w.layout.barHeight;
+        const sizeChanged =
+          !existing.shimmerSize ||
+          Math.abs(existing.shimmerSize.w - newW) > 0.5 ||
+          Math.abs(existing.shimmerSize.h - newH) > 0.5;
+        const valueChanged = existing.valueHash !== w.valueHash;
+
+        if (
+          (sizeChanged || valueChanged) &&
+          existing.shimmerIds.length > 0 &&
+          w.statsVisible &&
+          w.data.maxHp > 0
+        ) {
+          shimmerRebuildIds.push(...existing.shimmerIds);
+          const ctx: BuildContext = { token: w.tok, visible: w.tok.visible };
+          const ratio = Math.max(0, Math.min(1, w.data.hp / w.data.maxHp));
+          const newShimmer = buildHpShimmer(ctx, w.layout, ratio);
+          shimmerToAdd.push(newShimmer);
+          const oldShimmerSet = new Set(existing.shimmerIds);
+          existing.ids = existing.ids.filter((id) => !oldShimmerSet.has(id));
+          existing.ids.push(newShimmer.id);
+          existing.shimmerIds = [newShimmer.id];
+          existing.shimmerSize = { w: newW, h: newH };
+        }
+
+        geomPatches.push({ entry: existing, w });
+        existing.valueHash = w.valueHash;
+        existing.geomKey = w.geomKey;
+        existing.data = w.data;
+        existing.hash = w.hash;
+        continue;
+      }
+
+      const ctx: BuildContext = { token: w.tok, visible: w.tok.visible };
+      const newIds: string[] = [];
+
+      // HP bar + shimmer + text. In silhouette mode (player view of
+      // a locked token during combat) we still render bg + fill +
+      // shimmer so the player sees the proportion change at threshold
+      // boundaries, but we OMIT the text overlay (no exact numbers).
+      const isSilhouette = w.viewMode === "silhouette";
+      const shimmerIds: string[] = [];
+      if (w.data.maxHp > 0) {
+        const ratio = Math.max(0, Math.min(1, w.data.hp / w.data.maxHp));
+        const bg = buildBarBg(ctx, w.layout, w.statsVisible);
+        const fill = buildBarFill(ctx, w.layout, ratio);
+        toAdd.push(bg, fill);
+        newIds.push(bg.id, fill.id);
+
+        // Shimmer Effect (animated blood-cell flow shader) is
+        // disabled for now — the constant uniform updates were
+        // causing perceptible lag on token-heavy scenes. The bar
+        // still shows the static bg + fill curves so HP / shield
+        // remain readable. (Re-enable by uncommenting this block.)
+        // if (w.statsVisible) {
+        //   const shimmer = buildHpShimmer(ctx, w.layout, ratio);
+        //   toAdd.push(shimmer);
+        //   newIds.push(shimmer.id);
+        //   shimmerIds.push(shimmer.id);
+        // }
+
+        if (!isSilhouette) {
+          const text = buildBarText(ctx, w.layout, w.data);
+          toAdd.push(text);
+          newIds.push(text.id);
+        }
+      }
+      // AC shield + text — fully suppressed in silhouette mode.
+      if (!isSilhouette && w.layout.acCenter && w.data.ac != null) {
+        const acShield = buildAcShield(ctx, w.layout, w.layout.acCenter, AC_COLOR);
+        const acText = buildStatBubbleText(ctx, w.layout, w.layout.acCenter, w.data.ac, "ac-text");
+        toAdd.push(acShield, acText);
+        newIds.push(acShield.id, acText.id);
+      }
+      // Temp HP previously rendered as its own blue circle to the left
+      // of the shield. Per user request that's been removed — the
+      // " +N" suffix on the HP text already conveys the same info
+      // without a second floating bubble. The case "temp-bg" /
+      // "temp-text" branches in patchGeometry are now dead but kept
+      // for orphan tolerance during the upgrade transition (any
+      // lingering items get cleaned up by the `orphans` collector at
+      // the top of syncBubbles when their entry no longer references
+      // them).
+
+      entries.set(tokId, {
+        ids: newIds,
+        shimmerIds,
+        hash: w.hash,
+        structureHash: w.structureHash,
+        valueHash: w.valueHash,
+        geomKey: w.geomKey,
+        data: w.data,
+        statsVisible: w.statsVisible,
+        shimmerSize:
+          w.statsVisible && w.data.maxHp > 0
+            ? { w: w.layout.barWidth, h: w.layout.barHeight }
+            : undefined,
+      });
+    }
+
+    const allDeleteIds = [...rebuildIds, ...shimmerRebuildIds];
+    if (allDeleteIds.length) {
+      await OBR.scene.local.deleteItems(allDeleteIds).catch((err) =>
+        console.warn("[obr-suite/bubbles] delete-for-rebuild failed", err),
+      );
+    }
+    const allAddItems = [...toAdd, ...shimmerToAdd];
+    if (allAddItems.length) {
+      await OBR.scene.local.addItems(allAddItems).catch((err) =>
+        console.warn("[obr-suite/bubbles] addItems failed", err),
+      );
+    }
+    if (geomPatches.length) {
+      await patchGeometry(geomPatches);
+    }
+    // After every successful sync, kick the animation timer if any
+    // shimmer effects are now alive — and let the timer self-stop
+    // the next tick if `entries` is empty.
+    let anyShimmer = false;
+    for (const e of entries.values()) if (e.shimmerIds.length) { anyShimmer = true; break; }
+    if (anyShimmer) ensureAnimationTimer();
+    else stopAnimationTimer();
+
+    // (No bounds-poll path — SCALE inheritance handles live scaling
+    // during gestures, and items.onChange handles commit-time patch.)
+  } finally {
+    inSync = false;
+    if (queuedSync) {
+      queuedSync = false;
+      scheduleSync();
+    }
+  }
+}
+
+async function clearAll(): Promise<void> {
+  const ids: string[] = [];
+  for (const e of entries.values()) ids.push(...e.ids);
+  entries.clear();
+  stopAnimationTimer();
+  if (ids.length) {
+    await OBR.scene.local.deleteItems(ids).catch(() => {});
+  }
+}
+
+// --- Module lifecycle --------------------------------------------------
+
+export async function setupBubbles(): Promise<void> {
+  try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
+  try { myPlayerId = await OBR.player.getId(); } catch {}
+  try { cachedSceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+  // Watch role + id changes so they take effect mid-session.
+  unsubs.push(
+    OBR.player.onChange((p) => {
+      let changed = false;
+      const nextRole = (p.role as "GM" | "PLAYER") || role;
+      if (nextRole !== role) { role = nextRole; changed = true; }
+      if (p.id && p.id !== myPlayerId) { myPlayerId = p.id; changed = true; }
+      if (changed) scheduleSync();
+    }),
+  );
+
+  // Refresh DPI cache when the grid changes so the bounds-poll's
+  // synchronous read is never stale.
+  try {
+    unsubs.push(OBR.scene.grid.onChange((g) => {
+      cachedSceneDpi = g.dpi;
+      scheduleSync();
+    }));
+  } catch {}
+
+  unsubs.push(OBR.scene.items.onChange(() => {
+    scheduleSync();
+  }));
+
+  const onStorage = (e: StorageEvent) => {
+    if (
+      e.key === LS_BUBBLES_ENABLED ||
+      e.key === LS_BUBBLES_SCALE ||
+      e.key === LS_BUBBLES_VERTICAL_OFFSET ||
+      e.key === LS_BUBBLES_PLAYER_THRESHOLD
+    ) {
+      void clearAll().then(() => syncBubbles().catch(() => {}));
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  unsubs.push(() => window.removeEventListener("storage", onStorage));
+
+  // Combat state changes (initiative tracker writes to the
+  // `com.initiative-tracker/combat` scene metadata key when prep /
+  // combat starts or ends). Locked tokens are gated on this for
+  // their player-side visibility, so we re-sync whenever it flips.
+  unsubs.push(
+    OBR.scene.onMetadataChange((meta) => {
+      const next = readCombatActive(meta);
+      if (next !== cachedCombatActive) {
+        cachedCombatActive = next;
+        scheduleSync();
+      }
+    }),
+  );
+
+  // Scene-ready re-sync. Catches the "initial load race" the user
+  // reported where a scene's items arrive in `items.onChange` BEFORE
+  // their `image.scale` has finished propagating (default 1.0 at the
+  // moment of the first emit) — the bar would then be sized with
+  // tokenScale = 1 even on tokens that should render at 2× / 0.5×.
+  // We force a fresh `syncBubbles` shortly after scene-ready so the
+  // second pass picks up the now-stable scales. clearAll first so
+  // tokens that ended up with the wrong-sized bar from the early
+  // emit are rebuilt rather than `geomKey`-skipped.
+  unsubs.push(
+    OBR.scene.onReadyChange(async (ready) => {
+      if (!ready) return;
+      // 250 ms gives OBR's transform pipeline time to commit the
+      // scene's per-item scales after `isReady` flips true. Empirically
+      // 100 ms was sometimes still racy; 250 ms is well within the
+      // human-perceptible "scene just opened" window so the rebuild
+      // looks like part of the initial paint.
+      setTimeout(() => {
+        void clearAll().then(() => { void syncBubbles(); });
+      }, 250);
+    }),
+  );
+
+  void syncBubbles();
+}
+
+export async function teardownBubbles(): Promise<void> {
+  for (const u of unsubs.splice(0)) u();
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+  await clearAll();
+}
+
+// --- Public helper for other modules to write bubble data --------------
+export async function writeBubbleStats(
+  tokenId: string,
+  patch: { hp?: number; maxHp?: number; tempHp?: number; ac?: number | null; hide?: boolean; name?: string },
+): Promise<void> {
+  try {
+    await OBR.scene.items.updateItems([tokenId], (drafts) => {
+      for (const d of drafts) {
+        const cur = ((d.metadata as any)[BUBBLES_META] as Record<string, unknown> | undefined) ?? {};
+        const next: Record<string, unknown> = { ...cur };
+        if (patch.hp != null) next["health"] = Math.max(0, Math.floor(patch.hp));
+        if (patch.maxHp != null) next["max health"] = Math.max(0, Math.floor(patch.maxHp));
+        if (patch.tempHp != null) next["temporary health"] = Math.max(0, Math.floor(patch.tempHp));
+        if (patch.ac !== undefined) {
+          if (patch.ac == null) delete next["armor class"];
+          else next["armor class"] = Math.floor(patch.ac);
+        }
+        if (patch.hide != null) next["hide"] = !!patch.hide;
+        const mx = Number(next["max health"]);
+        const cur2 = Number(next["health"]);
+        if (Number.isFinite(mx) && mx > 0 && Number.isFinite(cur2)) {
+          next["health"] = Math.max(0, Math.min(cur2, mx));
+        }
+        (d.metadata as any)[BUBBLES_META] = next;
+        if (patch.name != null) (d.metadata as any)[BUBBLES_NAME] = patch.name;
+      }
+    });
+  } catch (e) {
+    console.warn("[obr-suite/bubbles] writeBubbleStats failed", e);
+  }
+}
+
+export function readBubbleStatsForToken(item: Item): BubbleData | null {
+  return readBubbleData(item);
+}
