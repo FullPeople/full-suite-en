@@ -115,6 +115,34 @@ function splitGraphemes(s: string): string[] {
   return Array.from(s);
 }
 
+// 2026-05-05 bug fix: per-grapheme width estimate.
+// The old pillW formula was `padX*2 + name.length * fontSize * 0.85`
+// — that 0.85 multiplier was tuned for CJK glyphs (which are roughly
+// `fontSize` wide each) and made English buff names allocate ~70%
+// more width than they actually rendered. Long English labels (e.g.
+// "Bardic Insp. 🎵") then overflowed the placeable arc on the FIRST
+// row, kicking subsequent buffs to outer rows where the curved-band
+// degenerates visually into "tall thin rectangles far from the
+// token". Now we estimate width per-grapheme: ASCII letter / digit /
+// punctuation ≈ 0.55× fontSize, ASCII space ≈ 0.30×, anything
+// non-ASCII (CJK / emoji) ≈ 1.0×.
+function estimateGraphemeWidth(g: string, fontSize: number): number {
+  if (!g) return 0;
+  const code = g.codePointAt(0) ?? 0;
+  if (code < 0x80) {
+    if (g === " ") return fontSize * 0.30;
+    if (/[iIl1.,;:!|']/.test(g)) return fontSize * 0.32;
+    return fontSize * 0.55;
+  }
+  // Non-ASCII: full-width CJK / emoji.
+  return fontSize * 1.0;
+}
+function estimateNameWidth(name: string, fontSize: number): number {
+  let total = 0;
+  for (const g of splitGraphemes(name)) total += estimateGraphemeWidth(g, fontSize);
+  return total;
+}
+
 import { getTokenCircleSpec } from "./circles";
 
 function meta(tokenId: string, role: Role, buffId: string, effect: BuffEffect): Record<string, unknown> {
@@ -384,7 +412,7 @@ function describe(token: Image, buffs: BuffDef[], sceneDpi: number): TokenDescri
     if (useEffect) {
       effectBuffs.push(b);
     } else {
-      const pillW = Math.max(20, padX * 2 + b.name.length * (fontSize * 0.85));
+      const pillW = Math.max(20, padX * 2 + estimateNameWidth(b.name, fontSize));
       defaultBuffs.push({ buff: b, pillW });
     }
   }
