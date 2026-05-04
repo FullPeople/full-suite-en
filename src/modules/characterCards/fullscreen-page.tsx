@@ -2,6 +2,19 @@ import { render } from "preact";
 import { useEffect, useState, useMemo, useCallback } from "preact/hooks";
 import { fireQuickRoll } from "../dice/tags";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
+import { getLocalLang } from "../../state";
+
+// Per-client UI language. The character-card iframe re-reads this on
+// load (changing language requires reopening the panel for now —
+// keeps the JSX render path simple). Top-level button labels, tab
+// names, and ability labels switch via this; deeper section text
+// (skill rows, weapon stats, spell tooltips) is still bilingual-
+// friendly Chinese for now since translating every leaf would be a
+// huge churn — file a follow-up if a player flags it.
+const lang: "zh" | "en" = (getLocalLang() === "en" ? "en" : "zh");
+function tt(zhText: string, enText: string): string {
+  return lang === "en" ? enText : zhText;
+}
 
 // ============================================================
 // Full-screen character card v2 — data-driven Preact renderer
@@ -53,23 +66,32 @@ interface CharacterData {
 
 // ===== Const tables ==========================================
 const ABL_ORDER = ["str", "dex", "con", "int", "wis", "cha"] as const;
-const ABL_LABEL: Record<string, string> = {
-  str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力",
-};
-const ABL_ABBR: Record<string, string> = {
-  str: "力", dex: "敏", con: "体", int: "智", wis: "感", cha: "魅",
-};
+const ABL_LABEL: Record<string, string> = lang === "en"
+  ? { str: "Strength", dex: "Dexterity", con: "Constitution", int: "Intelligence", wis: "Wisdom", cha: "Charisma" }
+  : { str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力" };
+const ABL_ABBR: Record<string, string> = lang === "en"
+  ? { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" }
+  : { str: "力", dex: "敏", con: "体", int: "智", wis: "感", cha: "魅" };
 
 type TabKey = "overview" | "combat" | "spells" | "features" | "inventory" | "background";
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "overview",   label: "概览" },
-  { key: "combat",     label: "战斗" },
-  { key: "spells",     label: "法术" },
-  { key: "features",   label: "特性" },
-  { key: "inventory",  label: "装备" },
-  { key: "background", label: "背景" },
-];
+const TABS: { key: TabKey; label: string }[] = lang === "en"
+  ? [
+      { key: "overview",   label: "Overview" },
+      { key: "combat",     label: "Combat" },
+      { key: "spells",     label: "Spells" },
+      { key: "features",   label: "Features" },
+      { key: "inventory",  label: "Inventory" },
+      { key: "background", label: "Background" },
+    ]
+  : [
+      { key: "overview",   label: "概览" },
+      { key: "combat",     label: "战斗" },
+      { key: "spells",     label: "法术" },
+      { key: "features",   label: "特性" },
+      { key: "inventory",  label: "装备" },
+      { key: "background", label: "背景" },
+    ];
 
 // ===== Helpers ===============================================
 function fmtMod(n: unknown): string {
@@ -101,7 +123,7 @@ function Header({ data, onExport, onImport, onRefresh, readOnly }: {
 }) {
   const id = data.identity || {};
   const cs = data.core_stats || {};
-  const name = id.display_name || id.character_name || "未命名";
+  const name = id.display_name || id.character_name || tt("未命名", "Unnamed");
   const englishName = id.character_name && id.display_name && id.character_name !== id.display_name
     ? id.character_name : null;
 
@@ -123,35 +145,35 @@ function Header({ data, onExport, onImport, onRefresh, readOnly }: {
         <div class="cc-head-meta">
           <span class="pip"><b>{race}</b></span>
           <span class="pip"><b>{cls}</b></span>
-          <span class="pip">总等级 <b>{totalLv}</b></span>
-          {id.alignment && <span class="pip">阵营 <b>{id.alignment}</b></span>}
-          {cs.size && <span class="pip">体型 <b>{cs.size}</b></span>}
-          {id.faith && <span class="pip">信仰 <b>{id.faith}</b></span>}
+          <span class="pip">{tt("总等级", "Total Level")} <b>{totalLv}</b></span>
+          {id.alignment && <span class="pip">{tt("阵营", "Alignment")} <b>{id.alignment}</b></span>}
+          {cs.size && <span class="pip">{tt("体型", "Size")} <b>{cs.size}</b></span>}
+          {id.faith && <span class="pip">{tt("信仰", "Faith")} <b>{id.faith}</b></span>}
         </div>
       </div>
       <div class="cc-head-right">
         {readOnly && (
           <span class="pip" style="background:rgba(245,166,35,0.18);color:#f0b94a;border:1px solid rgba(245,166,35,0.45);font-weight:700;letter-spacing:0.4px">
-            READ-ONLY EXAMPLE
+            {tt("只读示例", "READ-ONLY EXAMPLE")}
           </span>
         )}
         {!readOnly && (
-          <button class="cc-btn" onClick={onRefresh} title="重新拉取服务器上的最新数据">
-            <span class="ic">↻</span>刷新
+          <button class="cc-btn" onClick={onRefresh} title={tt("重新拉取服务器上的最新数据", "Re-fetch the latest data from the server")}>
+            <span class="ic">↻</span>{tt("刷新", "Refresh")}
           </button>
         )}
         <button
           class="cc-btn primary"
           onClick={onExport}
           title={readOnly
-            ? "Export this example as a JSON file you can edit and re-import as your own card."
-            : "把当前角色卡数据导出为 JSON 文件"}
+            ? tt("把这张示例卡导出为 JSON，编辑后可作为你自己的卡导入", "Export this example as a JSON file you can edit and re-import as your own card.")
+            : tt("把当前角色卡数据导出为 JSON 文件", "Export the current character card as a JSON file")}
         >
-          <span class="ic">⬇</span>{readOnly ? "Export as my card" : "导出 JSON"}
+          <span class="ic">⬇</span>{readOnly ? tt("导出为我的卡", "Export as my card") : tt("导出 JSON", "Export JSON")}
         </button>
         {!readOnly && (
-          <button class="cc-btn" onClick={onImport} title="从 JSON 文件加载角色卡（仅本地预览，未保存到服务器）">
-            <span class="ic">⬆</span>导入 JSON
+          <button class="cc-btn" onClick={onImport} title={tt("从 JSON 文件加载角色卡（仅本地预览，未保存到服务器）", "Load a character card from a JSON file (local preview only, not yet saved to server)")}>
+            <span class="ic">⬆</span>{tt("导入 JSON", "Import JSON")}
           </button>
         )}
       </div>
@@ -201,7 +223,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">临时</div>
+        <div class="stat-cell-label">{tt("临时", "Temp")}</div>
         <div class="stat-cell-val">
           <input class="stat-input big"
             value={hp.temp ?? 0}
@@ -217,32 +239,32 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell init">
-        <div class="stat-cell-label">先攻</div>
+        <div class="stat-cell-label">{tt("先攻", "Init")}</div>
         <div class="stat-cell-val">
           <span class="big">{fmtMod(cs.initiative)}</span>
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">速度</div>
+        <div class="stat-cell-label">{tt("速度", "Speed")}</div>
         <div class="stat-cell-val">
           <span class="big">{cs.speed ?? "?"}</span>
-          <span class="unit">尺</span>
+          <span class="unit">{tt("尺", "ft")}</span>
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">被察</div>
+        <div class="stat-cell-label">{tt("被察", "Passive")}</div>
         <div class="stat-cell-val">
           <span class="big">{cs.passive_perception ?? "?"}</span>
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">熟练</div>
+        <div class="stat-cell-label">{tt("熟练", "Prof")}</div>
         <div class="stat-cell-val">
           <span class="big">{fmtMod(cs.proficiency_bonus)}</span>
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">生命骰</div>
+        <div class="stat-cell-label">{tt("生命骰", "Hit Dice")}</div>
         <div class="stat-cell-val">
           <input class="stat-input big" value={hd.current ?? 0}
             onChange={(e: any) => setHdCur(e.target.value)} />
@@ -269,7 +291,7 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">属性 · 豁免 · 技能</span>
+        <span class="sec-h-title">{tt("属性 · 豁免 · 技能", "Abilities · Saves · Skills")}</span>
       </div>
       <div class="sec-body">
         <div class="abl-grid">
@@ -287,15 +309,15 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
                 <div class="abl-name">{ABL_LABEL[k]}</div>
                 <div class="abl-total">{a.total ?? "?"}</div>
                 <div class="abl-mod"
-                  onClick={() => rollExpr(`${ABL_LABEL[k]}检定`, aExpr)}
-                  onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${ABL_LABEL[k]}检定（优势）`, aExpr, "adv"); }}
-                  title={`${ABL_LABEL[k]}检定 ${aExpr}\n（左键投，右键优势）`}>
+                  onClick={() => rollExpr(tt(`${ABL_LABEL[k]}检定`, `${ABL_LABEL[k]} check`), aExpr)}
+                  onContextMenu={(e: any) => { e.preventDefault(); rollExpr(tt(`${ABL_LABEL[k]}检定（优势）`, `${ABL_LABEL[k]} check (adv)`), aExpr, "adv"); }}
+                  title={tt(`${ABL_LABEL[k]}检定 ${aExpr}\n（左键投，右键优势）`, `${ABL_LABEL[k]} check ${aExpr}\n(left-click roll, right-click advantage)`)}>
                   {fmtMod(a.modifier)}
                 </div>
                 <div class={`abl-save ${a.save?.proficient ? "is-prof" : ""}`}
-                  onClick={() => rollExpr(`${ABL_LABEL[k]}豁免`, sExpr)}
-                  title={`${ABL_LABEL[k]}豁免 ${sExpr}`}>
-                  豁免 <b>{fmtMod(saveBonus)}</b>
+                  onClick={() => rollExpr(tt(`${ABL_LABEL[k]}豁免`, `${ABL_LABEL[k]} save`), sExpr)}
+                  title={tt(`${ABL_LABEL[k]}豁免 ${sExpr}`, `${ABL_LABEL[k]} save ${sExpr}`)}>
+                  {tt("豁免", "Save")} <b>{fmtMod(saveBonus)}</b>
                 </div>
               </div>
             );
@@ -311,9 +333,9 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
                 const cls = s.proficiency === "expertise" ? "exp" : s.proficiency === "proficient" ? "prof" : "";
                 return (
                   <div class={`sk ${cls}`}
-                    onClick={() => rollExpr(`${s.name}检定`, expr)}
-                    onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${s.name}检定（优势）`, expr, "adv"); }}
-                    title={`${s.name}检定 ${expr}\n（左键投，右键优势）`}>
+                    onClick={() => rollExpr(tt(`${s.name}检定`, `${s.name} check`), expr)}
+                    onContextMenu={(e: any) => { e.preventDefault(); rollExpr(tt(`${s.name}检定（优势）`, `${s.name} check (adv)`), expr, "adv"); }}
+                    title={tt(`${s.name}检定 ${expr}\n（左键投，右键优势）`, `${s.name} check ${expr}\n(left-click roll, right-click advantage)`)}>
                     <span class="sk-prof">{cls === "exp" ? "★" : cls === "prof" ? "●" : "○"}</span>
                     <span class="sk-name">{s.name}</span>
                     <span class="sk-abil">{ABL_ABBR[s.ability] || ""}</span>
@@ -340,41 +362,41 @@ function Defenses({ data }: { data: CharacterData }) {
 
   return (
     <div class="sec">
-      <div class="sec-h"><span class="sec-h-title">防御 · 语言 · 工具</span></div>
+      <div class="sec-h"><span class="sec-h-title">{tt("防御 · 语言 · 工具", "Defenses · Languages · Tools")}</span></div>
       <div class="sec-body">
         {!!d.resistances?.length && (
           <div class="def-row">
-            <span class="def-label">抗性</span>
+            <span class="def-label">{tt("抗性", "Resist")}</span>
             {d.resistances.map((x: string) => <span class="def-tag res">{x}</span>)}
           </div>
         )}
         {!!d.immunities?.length && (
           <div class="def-row">
-            <span class="def-label">免疫</span>
+            <span class="def-label">{tt("免疫", "Immune")}</span>
             {d.immunities.map((x: string) => <span class="def-tag imm">{x}</span>)}
           </div>
         )}
         {!!d.advantages?.length && (
           <div class="def-row">
-            <span class="def-label">优势</span>
+            <span class="def-label">{tt("优势", "Advantage")}</span>
             {d.advantages.map((x: string) => <span class="def-tag adv">{x}</span>)}
           </div>
         )}
         {!!d.disadvantages?.length && (
           <div class="def-row">
-            <span class="def-label">劣势</span>
+            <span class="def-label">{tt("劣势", "Disadvantage")}</span>
             {d.disadvantages.map((x: string) => <span class="def-tag dis">{x}</span>)}
           </div>
         )}
         {!!langs.length && (
           <div class="def-row">
-            <span class="def-label">语言</span>
+            <span class="def-label">{tt("语言", "Languages")}</span>
             {langs.map((x) => <span class="def-tag">{x}</span>)}
           </div>
         )}
         {!!tools.length && (
           <div class="def-row">
-            <span class="def-label">工具</span>
+            <span class="def-label">{tt("工具", "Tools")}</span>
             {tools.map((x) => <span class="def-tag">{x}</span>)}
           </div>
         )}
@@ -392,31 +414,31 @@ function CombatSection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">战斗 · 武器 · 护甲</span>
+        <span class="sec-h-title">{tt("战斗 · 武器 · 护甲", "Combat · Weapons · Armor")}</span>
       </div>
       <div class="sec-body dense">
         {(armor.name || armor.ac_base != null) && (
           <div class="weap" style={{ background: "rgba(138,111,63,0.06)" }}>
             <div class="weap-name">
-              🛡 {armor.name || "护甲"}
-              {armor.equipped && <span class="weap-prof">已装备</span>}
-              {armor.attuned && <span class="weap-prof">同调</span>}
+              🛡 {armor.name || tt("护甲", "Armor")}
+              {armor.equipped && <span class="weap-prof">{tt("已装备", "Equipped")}</span>}
+              {armor.attuned && <span class="weap-prof">{tt("同调", "Attuned")}</span>}
             </div>
-            <div class="weap-atk" title="基础 AC + 敏捷上限">
+            <div class="weap-atk" title={tt("基础 AC + 敏捷上限", "Base AC + Dex cap")}>
               AC {armor.ac_base ?? "?"}
-              {typeof armor.dex_bonus_cap === "number" && ` (+敏≤${armor.dex_bonus_cap})`}
+              {typeof armor.dex_bonus_cap === "number" && ` (+${tt("敏", "Dex")}≤${armor.dex_bonus_cap})`}
             </div>
             <div class="weap-dmg" style={{ visibility: "hidden" }}>—</div>
             {armor.weight != null && (
-              <div class="weap-props">重量 {armor.weight} 磅</div>
+              <div class="weap-props">{tt(`重量 ${armor.weight} 磅`, `${armor.weight} lb`)}</div>
             )}
           </div>
         )}
         {shield.ac_bonus != null && (
           <div class="weap" style={{ background: "rgba(138,111,63,0.06)" }}>
-            <div class="weap-name">⛨ 盾牌
-              {shield.equipped && <span class="weap-prof">已装备</span>}
-              {shield.attuned && <span class="weap-prof">同调</span>}
+            <div class="weap-name">⛨ {tt("盾牌", "Shield")}
+              {shield.equipped && <span class="weap-prof">{tt("已装备", "Equipped")}</span>}
+              {shield.attuned && <span class="weap-prof">{tt("同调", "Attuned")}</span>}
             </div>
             <div class="weap-atk">+{shield.ac_bonus} AC</div>
             <div class="weap-dmg" style={{ visibility: "hidden" }}>—</div>
@@ -424,7 +446,7 @@ function CombatSection({ data }: { data: CharacterData }) {
         )}
         {weapons.length === 0 && !armor.name && !shield.ac_bonus && (
           <div style={{ color: "var(--ink-mute)", fontStyle: "italic", padding: "8px" }}>
-            暂未配置武器或护甲
+            {tt("暂未配置武器或护甲", "No weapons or armor configured yet")}
           </div>
         )}
         {weapons.map((w) => {
@@ -438,16 +460,16 @@ function CombatSection({ data }: { data: CharacterData }) {
             <div class="weap">
               <div class="weap-name">
                 ⚔ {w.name || "?"}
-                {w.proficient && <span class="weap-prof">熟</span>}
+                {w.proficient && <span class="weap-prof">{tt("熟", "Prof")}</span>}
               </div>
               <div class="weap-atk"
-                onClick={() => rollExpr(`${w.name} 命中`, atkExpr)}
-                onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${w.name} 命中（优势）`, atkExpr, "adv"); }}
-                title={`左键投，右键优势 · ${atkExpr}`}>
+                onClick={() => rollExpr(tt(`${w.name} 命中`, `${w.name} attack`), atkExpr)}
+                onContextMenu={(e: any) => { e.preventDefault(); rollExpr(tt(`${w.name} 命中（优势）`, `${w.name} attack (adv)`), atkExpr, "adv"); }}
+                title={tt(`左键投，右键优势 · ${atkExpr}`, `Left-click roll, right-click advantage · ${atkExpr}`)}>
                 {w.attack_bonus || `${fmtMod(atkBn)}`}
               </div>
               <div class="weap-dmg"
-                onClick={() => rollExpr(`${w.name} 伤害${w.damage_type ? `(${w.damage_type})` : ""}`, dmgExpr)}
+                onClick={() => rollExpr(tt(`${w.name} 伤害${w.damage_type ? `(${w.damage_type})` : ""}`, `${w.name} damage${w.damage_type ? `(${w.damage_type})` : ""}`), dmgExpr)}
                 title={`${w.damage} ${w.damage_type ?? ""}`}>
                 {w.damage ?? "—"} {w.damage_type ? <span style={{ opacity: 0.7, fontSize: "10px" }}>{w.damage_type}</span> : ""}
               </div>
@@ -456,11 +478,14 @@ function CombatSection({ data }: { data: CharacterData }) {
                   onClick={(e: any) => {
                     e.stopPropagation();
                     rollExpr(
-                      `${w.name} 附加伤害${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`,
+                      tt(
+                        `${w.name} 附加伤害${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`,
+                        `${w.name} bonus damage${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`,
+                      ),
                       String(w.extra_damage).replace(/\s+/g, ""),
                     );
                   }}
-                  title={`附加伤害骰 ${w.extra_damage}${w.extra_damage_type ? ` · ${w.extra_damage_type}` : ""}`}>
+                  title={tt(`附加伤害骰 ${w.extra_damage}${w.extra_damage_type ? ` · ${w.extra_damage_type}` : ""}`, `Bonus damage die ${w.extra_damage}${w.extra_damage_type ? ` · ${w.extra_damage_type}` : ""}`)}>
                   +{w.extra_damage} {w.extra_damage_type ? <span style={{ opacity: 0.7, fontSize: "10px" }}>{w.extra_damage_type}</span> : ""}
                 </div>
               )}
@@ -468,8 +493,8 @@ function CombatSection({ data }: { data: CharacterData }) {
                 <div class="weap-props">
                   {[
                     w.properties,
-                    w.weight != null ? `${w.weight}磅` : null,
-                    w.ammo_type ? `弹药:${w.ammo_type}` : null,
+                    w.weight != null ? tt(`${w.weight}磅`, `${w.weight} lb`) : null,
+                    w.ammo_type ? tt(`弹药:${w.ammo_type}`, `Ammo: ${w.ammo_type}`) : null,
                   ].filter(Boolean).join(" · ")}
                 </div>
               )}
@@ -510,23 +535,23 @@ function SpellsSection({ data }: { data: CharacterData }) {
       <>
         <div class="spell"
           onClick={() => setOpenSpell(isOpen ? null : key)}
-          title="点击展开法术详情">
+          title={tt("点击展开法术详情", "Click to expand spell details")}>
           <span class={`spell-lv ${(s.level ?? 0) === 0 ? "cantrip" : ""}`}>
-            {(s.level ?? 0) === 0 ? "戏" : `${s.level}环`}
+            {(s.level ?? 0) === 0 ? tt("戏", "C") : tt(`${s.level}环`, `Lv${s.level}`)}
           </span>
           <span class="spell-name">{s.name}</span>
-          {s.meta?.concentration && <span class="spell-tag conc">专注</span>}
-          {s.meta?.ritual && <span class="spell-tag ritual">仪式</span>}
+          {s.meta?.concentration && <span class="spell-tag conc">{tt("专注", "Conc")}</span>}
+          {s.meta?.ritual && <span class="spell-tag ritual">{tt("仪式", "Ritual")}</span>}
         </div>
         {isOpen && s.description && (
           <div class="spell-detail">
             {s.meta && (
               <div class="meta">
                 {s.meta.school && <span>{s.meta.school}</span>}
-                {s.meta.casting_time && <span>施法 {s.meta.casting_time}</span>}
-                {s.meta.range && <span>距离 {s.meta.range}</span>}
+                {s.meta.casting_time && <span>{tt(`施法 ${s.meta.casting_time}`, `Casting ${s.meta.casting_time}`)}</span>}
+                {s.meta.range && <span>{tt(`距离 ${s.meta.range}`, `Range ${s.meta.range}`)}</span>}
                 {s.meta.components && <span>{s.meta.components}</span>}
-                {s.meta.duration && <span>持续 {s.meta.duration}</span>}
+                {s.meta.duration && <span>{tt(`持续 ${s.meta.duration}`, `Duration ${s.meta.duration}`)}</span>}
                 {s.meta.source && <span>《{s.meta.source}》</span>}
               </div>
             )}
@@ -540,13 +565,13 @@ function SpellsSection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">法术</span>
+        <span class="sec-h-title">{tt("法术", "Spells")}</span>
         {(sp.spellcasting_ability || sp.save_dc) && (
           <span class="sec-h-meta">
-            {sp.spellcasting_ability && `关键属性: ${sp.spellcasting_ability}`}
-            {sp.save_dc != null && `  ·  豁免DC: ${sp.save_dc}`}
-            {sp.attack_bonus && `  ·  攻击: ${sp.attack_bonus}`}
-            {sp.max_prepared != null && `  ·  最大准备: ${sp.max_prepared}`}
+            {sp.spellcasting_ability && tt(`关键属性: ${sp.spellcasting_ability}`, `Ability: ${sp.spellcasting_ability}`)}
+            {sp.save_dc != null && tt(`  ·  豁免DC: ${sp.save_dc}`, `  ·  Save DC: ${sp.save_dc}`)}
+            {sp.attack_bonus && tt(`  ·  攻击: ${sp.attack_bonus}`, `  ·  Attack: ${sp.attack_bonus}`)}
+            {sp.max_prepared != null && tt(`  ·  最大准备: ${sp.max_prepared}`, `  ·  Max prepared: ${sp.max_prepared}`)}
           </span>
         )}
       </div>
@@ -558,7 +583,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
             const has = s && (s.max ?? 0) > 0;
             return (
               <div class={`slot ${has ? "has-slots" : ""}`}>
-                <div class="slot-lv">{lv}环</div>
+                <div class="slot-lv">{tt(`${lv}环`, `Lv${lv}`)}</div>
                 <div class="slot-cur">{has ? (s.current ?? 0) : "—"}</div>
                 <div class="slot-max">{has ? `/${s.max}` : ""}</div>
               </div>
@@ -573,7 +598,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
             borderRadius: "5px", fontSize: "11.5px",
             display: "flex", justifyContent: "space-between", alignItems: "center",
           }}>
-            <span style={{ color: "var(--ink-dim)", fontWeight: 600 }}>术法点</span>
+            <span style={{ color: "var(--ink-dim)", fontWeight: 600 }}>{tt("术法点", "Sorcery Points")}</span>
             <span style={{ fontFamily: "Georgia,serif", color: "var(--gold)", fontWeight: 700, fontSize: "14px" }}>
               {sp.sorcery_points.current ?? 0} / {sp.sorcery_points.max ?? 0}
             </span>
@@ -583,7 +608,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
         {/* Cantrips */}
         {!!cantrips.length && (
           <div class="spell-group">
-            <div class="spell-group-h">戏法</div>
+            <div class="spell-group-h">{tt("戏法", "Cantrips")}</div>
             {cantrips.map((s, i) => renderSpell(s, i, "cantrip"))}
           </div>
         )}
@@ -591,7 +616,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
         {/* Always known */}
         {!!always.length && (
           <div class="spell-group">
-            <div class="spell-group-h">始终准备</div>
+            <div class="spell-group-h">{tt("始终准备", "Always Prepared")}</div>
             {always.map((s, i) => renderSpell(s, i, "always"))}
           </div>
         )}
@@ -599,7 +624,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
         {/* Prepared groups */}
         {Object.entries(groups).map(([g, list]) => (
           <div class="spell-group">
-            <div class="spell-group-h">准备法术 · 组 {g}</div>
+            <div class="spell-group-h">{tt(`准备法术 · 组 ${g}`, `Prepared · Group ${g}`)}</div>
             {list.map((s, i) => renderSpell(s, i, `g${g}`))}
           </div>
         ))}
@@ -647,13 +672,13 @@ function FeaturesSection({ data }: { data: CharacterData }) {
 
   return (
     <div class="sec">
-      <div class="sec-h"><span class="sec-h-title">特性 · 专长</span></div>
+      <div class="sec-h"><span class="sec-h-title">{tt("特性 · 专长", "Features · Feats")}</span></div>
       <div class="sec-body">
-        <FeatureBlock title="职业特性" items={cls} />
-        <FeatureBlock title="种族特性" items={race} />
-        <FeatureBlock title="战斗风格" items={fightingStyle} />
-        <FeatureBlock title="特殊能力" items={special} />
-        <FeatureBlock title="专长" items={feats} />
+        <FeatureBlock title={tt("职业特性", "Class Features")} items={cls} />
+        <FeatureBlock title={tt("种族特性", "Race Features")} items={race} />
+        <FeatureBlock title={tt("战斗风格", "Fighting Style")} items={fightingStyle} />
+        <FeatureBlock title={tt("特殊能力", "Special Abilities")} items={special} />
+        <FeatureBlock title={tt("专长", "Feats")} items={feats} />
       </div>
     </div>
   );
@@ -663,30 +688,30 @@ function BackgroundSection({ data }: { data: CharacterData }) {
   const bg = data.background || {};
   const id = data.identity || {};
   const blocks = [
-    { label: "外貌", body: bg.appearance },
-    { label: "性格", body: bg.personality },
-    { label: "特质", body: bg.traits },
-    { label: "理念", body: bg.ideals },
-    { label: "羁绊", body: bg.bonds },
-    { label: "缺陷", body: bg.flaws },
-    { label: "故事", body: bg.story },
-    { label: "其他", body: bg.description },
+    { label: tt("外貌", "Appearance"), body: bg.appearance },
+    { label: tt("性格", "Personality"), body: bg.personality },
+    { label: tt("特质", "Traits"), body: bg.traits },
+    { label: tt("理念", "Ideals"), body: bg.ideals },
+    { label: tt("羁绊", "Bonds"), body: bg.bonds },
+    { label: tt("缺陷", "Flaws"), body: bg.flaws },
+    { label: tt("故事", "Story"), body: bg.story },
+    { label: tt("其他", "Other"), body: bg.description },
   ].filter((b) => b.body);
 
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">背景 · 个人</span>
-        {bg.background_name && <span class="sec-h-meta">背景：{bg.background_name}</span>}
+        <span class="sec-h-title">{tt("背景 · 个人", "Background · Personal")}</span>
+        {bg.background_name && <span class="sec-h-meta">{tt(`背景：${bg.background_name}`, `Background: ${bg.background_name}`)}</span>}
       </div>
       <div class="sec-body">
         <dl class="kv" style={{ marginBottom: "12px" }}>
-          {id.player && (<><dt>玩家</dt><dd>{id.player}</dd></>)}
-          {id.gender && (<><dt>性别</dt><dd>{id.gender}</dd></>)}
-          {id.age != null && (<><dt>年龄</dt><dd>{id.age}</dd></>)}
-          {id.height && (<><dt>身高</dt><dd>{id.height}</dd></>)}
-          {id.weight && (<><dt>体重</dt><dd>{id.weight}</dd></>)}
-          {id.hometown && (<><dt>家乡</dt><dd>{id.hometown}</dd></>)}
+          {id.player && (<><dt>{tt("玩家", "Player")}</dt><dd>{id.player}</dd></>)}
+          {id.gender && (<><dt>{tt("性别", "Gender")}</dt><dd>{id.gender}</dd></>)}
+          {id.age != null && (<><dt>{tt("年龄", "Age")}</dt><dd>{id.age}</dd></>)}
+          {id.height && (<><dt>{tt("身高", "Height")}</dt><dd>{id.height}</dd></>)}
+          {id.weight && (<><dt>{tt("体重", "Weight")}</dt><dd>{id.weight}</dd></>)}
+          {id.hometown && (<><dt>{tt("家乡", "Hometown")}</dt><dd>{id.hometown}</dd></>)}
         </dl>
         {!!blocks.length && (
           <div class="bio-grid">
@@ -699,7 +724,7 @@ function BackgroundSection({ data }: { data: CharacterData }) {
           </div>
         )}
         {!blocks.length && (
-          <div style={{ color: "var(--ink-mute)", fontStyle: "italic" }}>暂无背景信息</div>
+          <div style={{ color: "var(--ink-mute)", fontStyle: "italic" }}>{tt("暂无背景信息", "No background info yet")}</div>
         )}
       </div>
     </div>
@@ -717,48 +742,51 @@ function InventorySection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">装备 · 货币 · 负重</span>
+        <span class="sec-h-title">{tt("装备 · 货币 · 负重", "Inventory · Currency · Encumbrance")}</span>
         {inv.currency?.total_gp_raw && <span class="sec-h-meta">总值 {inv.currency.total_gp_raw}</span>}
       </div>
       <div class="sec-body">
         <div class="coin-row">
-          <div class="coin pp"><div class="coin-name">铂PP</div><div class="coin-val">{w.pp ?? 0}</div></div>
-          <div class="coin gp"><div class="coin-name">金GP</div><div class="coin-val">{w.gp ?? 0}</div></div>
-          <div class="coin ep"><div class="coin-name">银EP</div><div class="coin-val">{w.ep ?? 0}</div></div>
-          <div class="coin sp"><div class="coin-name">铜SP</div><div class="coin-val">{w.sp ?? 0}</div></div>
-          <div class="coin cp"><div class="coin-name">铜CP</div><div class="coin-val">{w.cp ?? 0}</div></div>
+          <div class="coin pp"><div class="coin-name">{tt("铂PP", "PP")}</div><div class="coin-val">{w.pp ?? 0}</div></div>
+          <div class="coin gp"><div class="coin-name">{tt("金GP", "GP")}</div><div class="coin-val">{w.gp ?? 0}</div></div>
+          <div class="coin ep"><div class="coin-name">{tt("银EP", "EP")}</div><div class="coin-val">{w.ep ?? 0}</div></div>
+          <div class="coin sp"><div class="coin-name">{tt("铜SP", "SP")}</div><div class="coin-val">{w.sp ?? 0}</div></div>
+          <div class="coin cp"><div class="coin-name">{tt("铜CP", "CP")}</div><div class="coin-val">{w.cp ?? 0}</div></div>
         </div>
 
         {(enc.equipment_weight != null || enc.total_weight != null) && (
           <div style={{ marginBottom: "10px" }}>
-            <div class="bio-block-h" style={{ marginBottom: "5px" }}>负重</div>
+            <div class="bio-block-h" style={{ marginBottom: "5px" }}>{tt("负重", "Encumbrance")}</div>
             <div class="enc-bar">
-              <div class="enc-cell">装备 <div class="v">{enc.equipment_weight ?? 0}</div></div>
-              <div class="enc-cell">背包 <div class="v">{(enc.pack1_weight ?? 0) + (enc.pack2_weight ?? 0)}</div></div>
-              <div class="enc-cell">总计 <div class="v">{enc.total_weight ?? 0}</div></div>
-              <div class="enc-cell">上限 <div class="v">{enc.max_capacity ?? "?"}</div></div>
+              <div class="enc-cell">{tt("装备", "Equipped")} <div class="v">{enc.equipment_weight ?? 0}</div></div>
+              <div class="enc-cell">{tt("背包", "Packs")} <div class="v">{(enc.pack1_weight ?? 0) + (enc.pack2_weight ?? 0)}</div></div>
+              <div class="enc-cell">{tt("总计", "Total")} <div class="v">{enc.total_weight ?? 0}</div></div>
+              <div class="enc-cell">{tt("上限", "Cap")} <div class="v">{enc.max_capacity ?? "?"}</div></div>
             </div>
           </div>
         )}
 
         {!!wondrous.length && (
-          <FeatureBlock title="奇物 / 魔法物品" items={wondrous} />
+          <FeatureBlock title={tt("奇物 / 魔法物品", "Wondrous Items / Magic Items")} items={wondrous} />
         )}
 
         {items.length === 0 && !wondrous.length && (
           <div style={{ color: "var(--ink-mute)", fontStyle: "italic", padding: "6px 0" }}>
-            （暂无背包细目，可在 xlsx 角色卡 "背包1/2" 表更新）
+            {tt(
+              "（暂无背包细目，可在 xlsx 角色卡 \"背包1/2\" 表更新）",
+              "(No pack items yet — fill them out in your character sheet)",
+            )}
           </div>
         )}
         {!!items.length && (
           <div style={{ marginTop: "8px" }}>
-            <div class="bio-block-h" style={{ marginBottom: "5px" }}>背包</div>
+            <div class="bio-block-h" style={{ marginBottom: "5px" }}>{tt("背包", "Pack")}</div>
             {items.map((it: any) => (
               <div class="weap">
                 <div class="weap-name">{it.name || "?"}</div>
                 <div class="weap-atk" style={{ visibility: "hidden" }}>—</div>
                 <div class="weap-dmg" style={{ background: "transparent", border: "0", color: "var(--ink-dim)" }}>
-                  {it.weight != null ? `${it.weight} 磅` : ""} {it.location ? `· ${it.location}` : ""}
+                  {it.weight != null ? tt(`${it.weight} 磅`, `${it.weight} lb`) : ""} {it.location ? `· ${it.location}` : ""}
                 </div>
                 {it.description && <div class="weap-props">{it.description}</div>}
               </div>
@@ -803,7 +831,7 @@ function App() {
       return;
     }
     if (!roomId || !cardId) {
-      setError("URL 缺少 room 或 card 参数");
+      setError(tt("URL 缺少 room 或 card 参数", "URL is missing room or card parameter"));
       return;
     }
     setError(null);
@@ -899,7 +927,7 @@ function App() {
     return <div class="cc-error">{error}</div>;
   }
   if (!data) {
-    return <div class="cc-loading">加载角色卡…</div>;
+    return <div class="cc-loading">{tt("加载角色卡…", "Loading character card…")}</div>;
   }
 
   return (

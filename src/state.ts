@@ -27,27 +27,31 @@ export type ModuleId =
   | "portals"
   | "bubbles"
   | "statusTracker"
+  | "hpBar"
   | "metadataInspector"
   | "vision";
 
 export type DataVersion = "2014" | "2024" | "all";
 export type Language = "zh" | "en";
 
-// User-managed data libraries. The default library is 5etools-on-kiwee,
-// always available. Additional libraries follow the same JSON schema
-// (see settings.ts → 库设置 tab → 教程 for the contract). When more
-// than one library is enabled, search / bestiary will merge results
-// from all of them, prefixed with the library `name` so the source is
-// clear in the UI.
+// User-managed data libraries. EN build ships with NONE preinstalled
+// (DEFAULT_LIBRARIES is empty). Users add SRD / homebrew sources via
+// Settings → Libraries. When more than one library is enabled, search
+// / bestiary merge results from all of them, prefixed with the
+// library `name` so the source is clear in the UI.
 export interface LibraryConfig {
   /** Stable id, used as React-style key + for URL caches. */
   id: string;
   /** Display name shown in search-result row + chips. */
   name: string;
-  /** Base URL — must serve `search/index.json` + `data/<file>.json`. */
+  /** Base URL — must serve `search/<indexPath>` + `data/<file>.json`. */
   baseUrl: string;
   /** Whether the library is currently active (data fetched + merged). */
   enabled: boolean;
+  /** Path (relative to baseUrl) for the search index file. Defaults
+   *  to `search/index.json` when omitted. Override exists for hosts
+   *  that serve multiple curated lists under different filenames. */
+  indexPath?: string;
   /** Built-in libraries can't be deleted, only enabled/disabled. */
   builtin?: boolean;
 }
@@ -111,7 +115,13 @@ export const DEFAULT_STATE: SuiteState = {
     // Each scene starts with it disabled; the user has to flip it
     // on in Settings → 状态追踪 every scene reload until it ships
     // as stable.
-    statusTracker: false,
+    // Status tracker — promoted out of beta 2026-05-04. Default ON.
+    statusTracker: true,
+    // HP bar component — standalone draggable HP/Temp/AC popover
+    // that auto-shows on selection of "lightweight" tokens (no
+    // bestiary binding, no character-card binding). Right-click
+    // menu adds / removes the per-token flag. Default ON.
+    hpBar: true,
     // DM-only inspection tool. Default OFF — most users never need
     // it; only enable when you specifically want to peek at what
     // plugins have stamped onto a token / scene / room. The tool
@@ -143,9 +153,9 @@ export function getState(): SuiteState {
 
 function merge(partial: any): SuiteState {
   if (!partial || typeof partial !== "object") return DEFAULT_STATE;
-  // Libraries merge: user-saved entries take precedence, but built-in
-  // libraries are always present (so the default 5etools never
-  // disappears from older saves).
+  // Libraries merge: user-saved entries take precedence; any
+  // built-in defaults (currently none for the EN build) are
+  // re-added if the saved partial is missing them.
   let libraries = DEFAULT_LIBRARIES.slice();
   if (Array.isArray(partial.libraries)) {
     const seen = new Set<string>();
@@ -159,6 +169,9 @@ function merge(partial: any): SuiteState {
           baseUrl: String(lib.baseUrl ?? ""),
           enabled: lib.enabled !== false,
           builtin: !!lib.builtin,
+          indexPath: typeof lib.indexPath === "string" && lib.indexPath.length > 0
+            ? lib.indexPath
+            : undefined,
         });
       }
     }

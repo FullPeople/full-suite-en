@@ -24,27 +24,26 @@ let liveBubbles: BubblesData = {};
 
 const SHOW_MSG = "com.bestiary/info-show";
 const BESTIARY_DATA_KEY = "com.bestiary/monsters";
-const DEFAULT_BASE = "https://5e.kiwee.top";
 
-// Read enabled-library bases from suite state at call time. Same
-// pattern as bestiary/data.ts — falls back to the kiwee mirror
-// when state isn't populated yet.
+// Read enabled-library bases from suite state at call time. EN
+// build has no fallback: empty libraries list = no remote fetches,
+// and the popover gracefully shows whatever's already cached in
+// scene metadata.
 function getBases(): string[] {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getState } = require("../../state") as typeof import("../../state");
     const libs = getState().libraries || [];
-    const bases = libs
+    return libs
       .filter((l) => l.enabled && typeof l.baseUrl === "string" && l.baseUrl.trim().length > 0)
       .map((l) => l.baseUrl.replace(/\/+$/, ""));
-    return bases.length > 0 ? bases : [DEFAULT_BASE];
   } catch {
-    return [DEFAULT_BASE];
+    return [];
   }
 }
 
-// Index cache is per-base now; a custom Cloudflare lib has its own
-// `bestiary/index.json` that may list different sources than kiwee.
+// Per-base bestiary index cache. Each enabled library may ship a
+// different `bestiary/index.json`, so we index by base URL.
 const indexCacheByBase = new Map<string, Record<string, string>>();
 async function loadBestiaryIndexFor(base: string): Promise<Record<string, string>> {
   const cached = indexCacheByBase.get(base);

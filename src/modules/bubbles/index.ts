@@ -85,6 +85,11 @@ export const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
 const CC_BIND_KEY = "com.character-cards/boundCardId";
 const BESTIARY_SLUG_KEY = "com.bestiary/slug";
 const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
+// Lightweight HP bar component flag — set by modules/hpBar/index.ts.
+// Tokens with this flag render bubbles even without a cc / bestiary
+// binding. Removing the flag (right-click "remove HP bar") makes
+// bubbles disappear again, matching the user's symmetric expectation.
+const HP_BAR_FLAG_KEY = "com.full-suite-en/hp-bar/enabled";
 
 // --- Functional constants matching upstream for visual parity ----------
 const BAR_HEIGHT = 20;
@@ -1238,7 +1243,8 @@ async function syncBubbles(): Promise<void> {
       const meta = (it.metadata as any) || {};
       const hasCc = typeof meta[CC_BIND_KEY] === "string" && meta[CC_BIND_KEY];
       const hasBestiary = typeof meta[BESTIARY_SLUG_KEY] === "string" && meta[BESTIARY_SLUG_KEY];
-      if (!hasCc && !hasBestiary) continue;
+      const hasHpBarComponent = !!meta[HP_BAR_FLAG_KEY];
+      if (!hasCc && !hasBestiary && !hasHpBarComponent) continue;
       const d = readBubbleData(it);
       if (!d) continue;
       // OBR's "Give Owner" sets `createdUserId` on the item to the

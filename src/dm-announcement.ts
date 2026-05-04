@@ -212,10 +212,12 @@ function renderSection(s: Section): string {
 // read the English log even on a Chinese client, or vice-versa.
 const LS_ANNOUNCE_LANG = "full-suite-en/announce-lang";
 function readAnnounceLang(): "zh" | "en" {
+  // EN variant: default to English. The user can still flip to 中文
+  // via the CN | EN toggle in the announcement header.
   try {
     const v = localStorage.getItem(LS_ANNOUNCE_LANG);
-    return v === "en" ? "en" : "zh";
-  } catch { return "zh"; }
+    return v === "zh" ? "zh" : "en";
+  } catch { return "en"; }
 }
 function writeAnnounceLang(v: "zh" | "en") {
   try { localStorage.setItem(LS_ANNOUNCE_LANG, v); } catch {}

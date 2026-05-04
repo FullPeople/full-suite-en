@@ -15,6 +15,7 @@ import OBR, {
   isImage,
 } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
+import { IS_MOBILE } from "../../feature-flags";
 import {
   PLUGIN_ID,
   STATUS_BUFFS_KEY,
@@ -26,9 +27,16 @@ import { syncTokenBuffs, readTokenBuffIds } from "./bubbles";
 
 const MODAL_ID = "com.full-suite-en/status-tracker";
 const MODAL_URL = assetUrl("status-tracker.html");
+const TOOL_ID = "com.full-suite-en/status-tracker-tool";
 const TOOL_ACTION_ID = "com.full-suite-en/status-tracker-toggle";
 const SELECT_TOOL = "rodeo.owlbear.tool/select";
+const MOVE_TOOL = "rodeo.owlbear.tool/move";
 const ICON_URL = assetUrl("status-icon.svg");
+
+// Tool the user was on when they activated the status tracker, so
+// the `]` shortcut can return there instead of always falling back
+// to the move tool.
+let previousTool: string | null = null;
 
 // LOCAL broadcast — the in-modal iframe asks us to refresh a token's
 // buff bubbles on the canvas after the DM drags / drops in the modal.
@@ -139,11 +147,75 @@ async function syncAllVisibleTokens(): Promise<void> {
 }
 
 export async function setupStatusTracker(): Promise<void> {
-  // Tool action — registered on the Select tool. The shortcut
-  // "BracketRight" matches the `]` key on US/CN keyboards. Same
-  // action button visible on the Select toolbar so it's also
-  // clickable (the spec calls this the "in tool, registered as
-  // toggleable" path).
+  // Mobile clients skip setup entirely — palette + capture overlay
+  // rely on heavy WebGL machinery that chokes on phone GPUs. The
+  // background.ts yellow-warning notification covers user feedback.
+  if (IS_MOBILE) {
+    console.info("[status] mobile client — skipping setup");
+    return;
+  }
+
+  // Toolbar tool — Bestiary-style toggle. Click the icon → activate
+  // the tool → modal opens. Click any other tool → deactivate →
+  // modal closes. No role filter — both GM and players see the
+  // icon (item 4 in the 2026-05-04 user spec).
+  try {
+    await OBR.tool.create({
+      id: TOOL_ID,
+      icons: [
+        {
+          icon: ICON_URL,
+          label: "Status Tracker",
+        },
+      ],
+      onClick: async () => {
+        await OBR.tool.activateTool(TOOL_ID);
+        return false;
+      },
+    });
+    // Passthrough mode — required for the tool to be selectable.
+    await OBR.tool.createMode({
+      id: `${TOOL_ID}/mode`,
+      icons: [
+        {
+          icon: ICON_URL,
+          label: "Status Tracker",
+          filter: { activeTools: [TOOL_ID] },
+        },
+      ],
+      cursors: [{ cursor: "default" }],
+    });
+  } catch (e) {
+    console.warn("[obr-suite/status] tool.create failed", e);
+  }
+
+  // Tool change → open / close the modal.
+  unsubs.push(
+    OBR.tool.onToolChange(async (activeId) => {
+      if (activeId === TOOL_ID) {
+        if (!isOpen) await openModal();
+      } else {
+        previousTool = activeId;
+        if (isOpen) await closeModal();
+      }
+    }),
+  );
+
+  // `]` shortcut — toggles via the tool API so the active tool
+  // stays in sync with the modal state.
+  const performShortcutToggle = async (): Promise<void> => {
+    try {
+      const cur = await OBR.tool.getActiveTool();
+      if (cur === TOOL_ID) {
+        await OBR.tool.activateTool(previousTool ?? MOVE_TOOL);
+      } else {
+        previousTool = cur;
+        await OBR.tool.activateTool(TOOL_ID);
+      }
+    } catch (e) {
+      console.warn("[obr-suite/status] BracketRight toggle failed", e);
+    }
+  };
   try {
     await OBR.tool.createAction({
       id: TOOL_ACTION_ID,
@@ -151,11 +223,11 @@ export async function setupStatusTracker(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "状态追踪",
-          filter: { activeTools: [SELECT_TOOL] },
+          label: "Status Tracker",
+          filter: { activeTools: [SELECT_TOOL, TOOL_ID] },
         },
       ],
-      onClick: async () => { await toggleModal(); },
+      onClick: performShortcutToggle,
     });
   } catch (e) {
     console.warn("[obr-suite/status] createAction failed", e);
@@ -194,5 +266,7 @@ export async function teardownStatusTracker(): Promise<void> {
     try { u(); } catch {}
   }
   try { await OBR.tool.removeAction(TOOL_ACTION_ID); } catch {}
+  try { await OBR.tool.removeMode(`${TOOL_ID}/mode`); } catch {}
+  try { await OBR.tool.remove(TOOL_ID); } catch {}
   await closeModal();
 }

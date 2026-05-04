@@ -14,37 +14,43 @@ function detectEdition(source: string): MonsterEdition {
   return "other";
 }
 
-// Data source (JSON) — primary kiwee.top Chinese mirror, but the
-// suite's LibraryConfig (state.libraries) can add user-supplied
-// alternates (e.g. self-hosted Cloudflare worker). loadAllMonsters
-// fetches from EVERY enabled library and merges results, so
-// monsters from a custom library show up in the bestiary panel
-// alongside the default ones.
-const DEFAULT_BASE = "https://5e.kiwee.top";
+// EN build ships with NO bundled data library. DMs configure their
+// own SRD / homebrew JSON source(s) under Settings → Libraries.
+// loadAllMonsters fetches from EVERY enabled library and merges
+// results, so monsters from multiple custom libraries show up
+// together in the bestiary panel.
 
 function getEnabledLibraryBases(): string[] {
-  // EN variant: no fallback. Empty libraries list = no remote data
-  // fetched. The bestiary module's setup() already short-circuits
-  // when libraries are empty, so this rarely runs in that state, but
-  // keeping the strict-empty contract here means accidental imports
-  // never reach the (intentionally absent) Chinese 5etools mirror.
+  // EN variant: strict-empty contract. No `DEFAULT_BASE` fallback —
+  // empty libraries list = no remote data fetched. The bestiary
+  // module's setup() short-circuits in that state and surfaces a
+  // "configure a library" hint in the settings panel.
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getState } = require("../../state") as typeof import("../../state");
     const libs = getState().libraries || [];
-    return libs
+    const bases = libs
       .filter((l) => l.enabled && typeof l.baseUrl === "string" && l.baseUrl.trim().length > 0)
       .map((l) => l.baseUrl.replace(/\/+$/, ""));
+    // Dedup duplicate baseUrls so we don't fetch the same data twice.
+    const seen = new Set<string>();
+    return bases.filter((b) => {
+      if (seen.has(b)) return false;
+      seen.add(b);
+      return true;
+    });
   } catch {
     return [];
   }
 }
-// Images: proxied through our own server so OBR can load them as WebGL textures
-// (5e.tools doesn't send CORS headers, so direct loading fails in scene rendering).
+// Token images proxied through our self-hosted CORS proxy so OBR
+// can load them as WebGL textures (most upstream image hosts don't
+// emit `Access-Control-Allow-Origin: *`, which OBR scene rendering
+// requires).
 const IMG_BASE = "https://obr.dnd.center/5etools-img";
 
 const SIZE_MAP: Record<string, string> = {
-  T: "超小型", S: "小型", M: "中型", L: "大型", H: "巨型", G: "超巨型",
+  T: "Tiny", S: "Small", M: "Medium", L: "Large", H: "Huge", G: "Gargantuan",
 };
 
 function parseAC(ac: any): number {
@@ -358,9 +364,19 @@ export async function loadAllMonsters(): Promise<ParsedMonster[]> {
       seenRaw.add(m);
       uniqueRaw.push(m);
     }
-    const all = uniqueRaw
+    let all = uniqueRaw
       .map(parseMon)
       .filter((x): x is ParsedMonster => x !== null);
+    // Cross-library dedup with case-insensitive source + engName.
+    const seenKey = new Set<string>();
+    all = all.filter((m) => {
+      const src = (m.source || "").trim().toUpperCase();
+      const eng = (m.engName || m.name || "").trim().toLowerCase();
+      const key = `${src}::${eng}`;
+      if (seenKey.has(key)) return false;
+      seenKey.add(key);
+      return true;
+    });
     // Sort by CR numerically, then by name
     all.sort((a, b) => {
       const crA = parseCR(a.cr);

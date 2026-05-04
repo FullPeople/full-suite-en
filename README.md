@@ -4,7 +4,9 @@
   <img src="docs/screenshots/hero.png" alt="Full Suite" width="900" />
 </p>
 
-An [Owlbear Rodeo](https://owlbear.rodeo) extension that bundles eight modules behind a single manifest: dice, initiative tracker, bestiary, character cards, global search, time stop, sync viewport, and portals.
+An [Owlbear Rodeo](https://owlbear.rodeo) extension that bundles ten modules behind a single manifest: dice, initiative tracker, bestiary, character cards, global search, time stop, sync viewport, portals, HP / AC bubbles, and status tracker.
+
+> **EN build** — neutral, ships **no built-in content library** and no localised templates. DMs add their own SRD / homebrew JSON sources under Settings → Libraries. UI defaults to English.
 
 ```
 https://obr.dnd.center/full-suite-en/manifest.json
