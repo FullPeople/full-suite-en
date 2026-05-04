@@ -1,5 +1,6 @@
 import { Monster, ParsedMonster, MonsterEdition } from "./types";
 import { getAllLocalMonsters } from "../../utils/localContent";
+import { assetUrl } from "../../asset-base";
 
 // "2014" = strictly PHB + MM (the original core books). "2024" = strictly
 // XPHB + XMM (the 2024 reprint). Every other source — DMG/XDMG, TCE, XGE,
@@ -43,11 +44,16 @@ function getEnabledLibraryBases(): string[] {
     return [];
   }
 }
-// Token images proxied through our self-hosted CORS proxy so OBR
-// can load them as WebGL textures (most upstream image hosts don't
-// emit `Access-Control-Allow-Origin: *`, which OBR scene rendering
-// requires).
-const IMG_BASE = "https://obr.dnd.center/5etools-img";
+// Default token image — a generic question-mark token used as the
+// fallback when a monster has no explicit `tokenHref` / `tokenUrl`.
+// EN build ships no bundled token-image library, so the URL-
+// auto-construction path that older 5etools-style data uses is
+// replaced by this neutral placeholder. Users who want real token
+// art configure their library so each entry's `tokenHref` field
+// points at the right image.
+function defaultTokenUrl(): string {
+  return assetUrl("default-token.svg");
+}
 
 const SIZE_MAP: Record<string, string> = {
   T: "Tiny", S: "Small", M: "Medium", L: "Large", H: "Huge", G: "Gargantuan",
@@ -71,37 +77,28 @@ function parseType(type: any): string {
   return String(type);
 }
 
-// Replicates 5etools Parser.nameToTokenName: toAscii + strip quotes
-// We can't call toAscii (it's a String prototype extension), so we approximate
-// with just removing quotes — most English monster names are already ASCII.
-function nameToTokenName(name: string): string {
-  return (name || "").replace(/"/g, "");
-}
+// (Token-name normalisation helper removed alongside the auto-
+//  construction path in buildTokenUrl — EN build no longer derives
+//  image URLs from monster names.)
 
 function buildTokenUrl(m: any): string {
-  // Matches 5etools Renderer.monster.getTokenUrl logic, plus our
-  // homebrew extensions:
-  //   • `tokenHref: { type: "external", url }`  → external image (used
-  //     by local-content packs that ship their own token URLs instead
-  //     of relying on the IMG_BASE convention)
-  //   • `tokenHref: { type: "internal", path }` → IMG_BASE-relative
-  //   • `tokenUrl: "..."`                       → legacy direct URL
+  // EN build resolves token images via:
+  //   • `tokenHref: { type: "external", url }` → use that URL directly
+  //   • `tokenUrl: "..."`                      → legacy direct URL
+  //   • anything else                          → bundled default-token
+  //                                              (question-mark placeholder)
+  // The "auto-construct from source + name" convention from older
+  // 5etools-style data is gone — that pattern hard-coded a specific
+  // upstream host which the EN build doesn't ship. Users who want
+  // real token art either include `tokenHref.url` in their library
+  // entries, or swap the placeholder for their own image post-spawn
+  // via OBR's image picker.
   if (m.tokenHref && typeof m.tokenHref === "object") {
     const th = m.tokenHref;
     if (th.type === "external" && typeof th.url === "string" && th.url) return th.url;
-    if (th.type === "internal" && typeof th.path === "string" && th.path) {
-      return `${IMG_BASE}/${th.path.replace(/^\/+/, "")}`;
-    }
   }
-  if (m.tokenUrl) return m.tokenUrl; // legacy
-  if (m.token?.source && m.token?.name) {
-    return `${IMG_BASE}/bestiary/tokens/${m.token.source}/${encodeURIComponent(nameToTokenName(m.token.name))}.webp`;
-  }
-  if (m.hasToken === false) return "";
-  const src = m.source;
-  const nm = m.ENG_name || m.name;
-  if (!src || !nm) return "";
-  return `${IMG_BASE}/bestiary/tokens/${src}/${encodeURIComponent(nameToTokenName(nm))}.webp`;
+  if (m.tokenUrl) return m.tokenUrl; // legacy direct URL
+  return defaultTokenUrl();
 }
 
 function parseMon(m: any): ParsedMonster | null {
@@ -297,9 +294,9 @@ export async function loadAllMonsters(): Promise<ParsedMonster[]> {
           }
           if (monsterSources.size === 0) return [] as Monster[];
           // Try each source under multiple case variants — GitHub
-          // Pages is case-sensitive but homebrew authors often use
-          // uppercase filenames while kiwee uses lowercase. We try
-          // them all and use whichever 200s.
+          // Pages is case-sensitive and different upstreams disagree
+          // on filename casing for the same source code. Try every
+          // variant and use whichever 200s.
           const results = await Promise.all(
             Array.from(monsterSources).map(async (src) => {
               const cases = new Set<string>([src, src.toLowerCase(), src.toUpperCase()]);
@@ -412,7 +409,7 @@ export function searchMonsters(
     (m) => m.edition === "other" || enabledEditions.has(m.edition)
   );
 
-  // Source-code filter (e.g. "PHB" / "MYHB" / "kiwee"). Case-
+  // Source-code filter (e.g. "PHB" / "MYHB" / a homebrew tag). Case-
   // insensitive substring match on m.source so a homebrew GM can
   // narrow the panel to ONLY their imported entries by typing the
   // source slug they used.

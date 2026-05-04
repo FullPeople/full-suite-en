@@ -270,7 +270,17 @@ async function loadAndRender(): Promise<void> {
   cachedSections = parseAnnouncement(md);
   const lang = readAnnounceLang();
   applyLangButtons(lang);
+  applyChromeForLang(lang);
   rerenderForLang(lang);
+}
+
+/** Localise the bits of the modal chrome that aren't part of the
+ *  rendered markdown: the loading hint (replaced by content after
+ *  fetch) and the close button at the foot. Called whenever the
+ *  CN|EN toggle changes. */
+function applyChromeForLang(lang: "zh" | "en"): void {
+  const closeBtn = document.getElementById("btn-close");
+  if (closeBtn) closeBtn.textContent = lang === "zh" ? "我知道了" : "Got it";
 }
 
 OBR.onReady(() => {
@@ -284,11 +294,13 @@ OBR.onReady(() => {
   document.getElementById("ann-lang-zh")?.addEventListener("click", () => {
     writeAnnounceLang("zh");
     applyLangButtons("zh");
+    applyChromeForLang("zh");
     rerenderForLang("zh");
   });
   document.getElementById("ann-lang-en")?.addEventListener("click", () => {
     writeAnnounceLang("en");
     applyLangButtons("en");
+    applyChromeForLang("en");
     rerenderForLang("en");
   });
   window.addEventListener("keydown", async (e) => {

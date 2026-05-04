@@ -88,7 +88,7 @@ async function fetchMonsterFile(base: string, filename: string): Promise<any[]> 
 
 // Walk every enabled library until we find the monster. Custom libs
 // usually win because they're narrower; if not found there, falls
-// through to kiwee.
+// through to the next library on the list.
 async function findMonster(source: string, engName: string): Promise<any | null> {
   for (const base of getBases()) {
     const index = await loadBestiaryIndexFor(base);

@@ -1,10 +1,13 @@
 # Full Suite · Announcement
 
-> 编辑此文件直接修改弹窗内容。每个 `## 标题 [kind] [lang]` 是一个分区，
-> kind 决定渲染样式：`[warn]` 红色警告条 / `[info]` 蓝色提示条 /
-> `[todo]` 待办列表 / `[changelog]` 更新日志 / `[footer]` 落款。
-> lang 控制独立的 CN|EN 切换：`[zh]` 仅中文模式显示，`[en]` 仅英文，
-> 不带语言标签则两边都显示（如 footer / 共享通知）。
+> Edit this file to update the modal content. The cluster-row code
+> grabs the first `- X.Y.Z · description` line (under any [changelog]
+> section, or anywhere else) to drive the unread-version blink.
+> Bump the version here whenever a release ships.
+
+## Changelog [changelog]
+
+- 1.1.0 · v1.1.0 EN rebuild — neutralised branding for the OBR community store, default UI + announcement language is English, settings render fix (Vision/Fog and HP-Bubbles descriptions now visible), HP Bar component module added, bubbles size slider, status tracker out of beta, mobile-aware tool registration, dice history closes on scene load.
 
 ## 提示 [info] [zh]
 

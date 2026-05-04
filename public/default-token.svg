@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 280" width="280" height="280">
+  <!--
+    Default token placeholder.
+    Used by the bestiary module when a monster entry has no
+    explicit token image. Self-contained question-mark glyph on
+    a circular slate background.
+  -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#3a4255"/>
+      <stop offset="60%" stop-color="#262a3a"/>
+      <stop offset="100%" stop-color="#16182a"/>
+    </radialGradient>
+    <linearGradient id="ringFx" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.18)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <circle cx="140" cy="140" r="134" fill="url(#bg)"/>
+  <circle cx="140" cy="140" r="134" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3"/>
+  <circle cx="140" cy="120" r="120" fill="url(#ringFx)" opacity="0.7"/>
+  <text
+    x="140" y="200"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="180"
+    font-weight="700"
+    fill="#f5a623"
+    style="paint-order: stroke; stroke: rgba(0,0,0,0.45); stroke-width: 4;"
+  >?</text>
+</svg>

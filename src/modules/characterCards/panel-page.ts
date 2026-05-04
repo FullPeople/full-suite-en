@@ -435,11 +435,12 @@ function ensureExampleIframe(): HTMLIFrameElement {
 }
 
 // Single-live-iframe policy for external resources.
-// All 5e.kiwee.top iframes share one Chrome renderer process and a single
-// V8 heap (~4GB ceiling). Keeping 6 heavy reference pages resident easily
-// crashes that process. We only keep ONE resource iframe alive at a time —
-// switching tabs unloads the previous one. Angular state loss on switch is
-// an acceptable trade-off vs. crashing the whole app.
+// External reference iframes (when present) share one Chrome
+// renderer process and a single V8 heap (~4GB ceiling). Keeping
+// many heavy SPAs resident easily crashes that process. We keep
+// ONE resource iframe alive at a time — switching tabs unloads
+// the previous one. State loss on switch is an acceptable trade-
+// off vs. crashing the tab. (EN build ships RESOURCES = [].)
 function ensureResourceIframe(def: ResourceDef): HTMLIFrameElement {
   // Unload every other resource iframe.
   for (const [slug, f] of resourceIframes) {
