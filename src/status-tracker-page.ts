@@ -28,6 +28,7 @@
 // We accept either on read; we always write v2 on save.
 
 import OBR from "@owlbear-rodeo/sdk";
+import { installDebugOverlay } from "./utils/debugOverlay";
 import {
   PLUGIN_ID,
   SCENE_BUFF_CATALOG_KEY,
@@ -142,6 +143,8 @@ function parseBuffArray(arr: any[]): BuffDef[] {
       color: typeof e.color === "string" ? e.color : "#ffffff",
       group: typeof e.group === "string" && e.group.length > 0 ? e.group : undefined,
     };
+    const rounds = Math.floor(Number(e.rounds));
+    if (Number.isFinite(rounds) && rounds > 0) def.rounds = rounds;
     const eff = parseEffect(e.effect);
     if (eff && eff !== "default") def.effect = eff;
     // effectParams: imageUrl (+ cached dims) / speed / count
@@ -553,6 +556,10 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
       <input class="pop-color" type="color" value="${escapeHtml(buff.color)}"/>
       <input class="pop-name" type="text" maxlength="20" value="${escapeHtml(buff.name)}" placeholder="Name"/>
     </div>
+    <div class="pop-row">
+      <input class="pop-rounds" type="number" min="0" max="99" step="1"
+             value="${buff.rounds ?? ""}" placeholder="Rounds (0 = keep)"/>
+    </div>
     ${effectsBlock}
     <div class="pop-row pop-actions">
       <button class="pop-del" type="button">Delete</button>
@@ -583,6 +590,7 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
 
   const nameInp = popupEl.querySelector<HTMLInputElement>(".pop-name")!;
   const colorInp = popupEl.querySelector<HTMLInputElement>(".pop-color")!;
+  const roundsInp = popupEl.querySelector<HTMLInputElement>(".pop-rounds")!;
   const save = popupEl.querySelector<HTMLButtonElement>(".pop-save")!;
   const cancel = popupEl.querySelector<HTMLButtonElement>(".pop-cancel")!;
   const del = popupEl.querySelector<HTMLButtonElement>(".pop-del")!;
@@ -643,6 +651,9 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
     if (target) {
       target.name = name;
       target.color = colorInp.value;
+      const rounds = Math.floor(Number(roundsInp.value));
+      if (Number.isFinite(rounds) && rounds > 0) target.rounds = rounds;
+      else delete target.rounds;
       target.effect = pendingEffect === "default" ? undefined : pendingEffect;
       // effectParams: persist imageUrl + cached dims when user has
       // configured a particle image. Empty URL → no effectParams,
@@ -723,7 +734,7 @@ async function onRenameCategory(oldName: string): Promise<void> {
   else groupOrder.push(trimmed);
   if (activeFilter === oldName) activeFilter = trimmed;
   await saveCatalog();
-  render();
+  if (!popupBuffId) render();
 }
 
 async function onReorderCategory(dragName: string, dropOnName: string): Promise<void> {
@@ -928,6 +939,9 @@ fileImport.addEventListener("change", async () => {
 // === Boot ===================================================================
 
 OBR.onReady(async () => {
+  installDebugOverlay();
   await loadCatalog();
-  OBR.scene.onMetadataChange(() => { void loadCatalog(); });
+  OBR.scene.onMetadataChange((meta) => {
+    if (SCENE_BUFF_CATALOG_KEY in meta) void loadCatalog();
+  });
 });

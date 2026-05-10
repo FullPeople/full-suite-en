@@ -25,11 +25,13 @@ const TOOL_ID = "com.full-suite-en/metadata-inspector";
 const MODE_DEFAULT = `${TOOL_ID}/mode-default`;
 const MODE_SCENE = `${TOOL_ID}/mode-scene`;
 const MODE_ROOM = `${TOOL_ID}/mode-room`;
+const MODE_PERFORMANCE = `${TOOL_ID}/mode-performance`;
 const POPOVER_ITEM_ID = "com.full-suite-en/metadata-inspector/item";
 const POPOVER_META_ID = "com.full-suite-en/metadata-inspector/meta";
 const ICON_URL = assetUrl("metadata-inspector-icon.svg");
 const ICON_SCENE_URL = assetUrl("metadata-inspector-scene-icon.svg");
 const ICON_ROOM_URL = assetUrl("metadata-inspector-room-icon.svg");
+const ICON_PERFORMANCE_URL = assetUrl("metadata-inspector-room-icon.svg"); // TODO: create performance icon
 const POPOVER_URL = assetUrl("metadata-inspector.html");
 
 export const BC_INSPECTOR_SET_MODE = "com.full-suite-en/metadata-inspector/set-mode";
@@ -48,7 +50,7 @@ let itemPopoverOpen = false;
 let metaPopoverOpen = false;
 let lastInspectedItemId: string | null = null;
 
-type MetaMode = "scene" | "room";
+type MetaMode = "scene" | "room" | "performance";
 
 async function itemAnchor(itemId: string): Promise<{ left: number; top: number }> {
   let vw = 1280;
@@ -209,6 +211,13 @@ export async function setupMetadataInspector(): Promise<void> {
   const role = await OBR.player.getRole().catch(() => "PLAYER");
   if (role !== "GM") return;
 
+  // Remove any stale tool/mode state left behind by a crashed iframe or
+  // interrupted teardown, then recreate cleanly.
+  try { await OBR.tool.remove(TOOL_ID); } catch {}
+  try { await OBR.tool.removeMode(MODE_DEFAULT); } catch {}
+  try { await OBR.tool.removeMode(MODE_SCENE); } catch {}
+  try { await OBR.tool.removeMode(MODE_ROOM); } catch {}
+
   // Tool entry — left sidebar.
   try {
     await OBR.tool.create({
@@ -285,6 +294,24 @@ export async function setupMetadataInspector(): Promise<void> {
     console.warn("[metadata-inspector] createMode room failed", e);
   }
 
+  // Performance mode — same big popover, defaults to performance tab.
+  try {
+    await OBR.tool.createMode({
+      id: MODE_PERFORMANCE,
+      icons: [{
+        icon: ICON_PERFORMANCE_URL,
+        label: "性能指标 (FPS 和内存)",
+        filter: { activeTools: [TOOL_ID] },
+      }],
+      cursors: [{ cursor: "help" }],
+      onActivate: () => {
+        void openMetaInspector("performance");
+      },
+    });
+  } catch (e) {
+    console.warn("[metadata-inspector] createMode performance failed", e);
+  }
+
   // Track active tool. Activating telescope starts in MODE_DEFAULT
   // (defaultMode set on the tool above), which fires onActivate and
   // syncs item popover from selection. Deactivating closes both
@@ -339,4 +366,5 @@ export function teardownMetadataInspector(): void {
   try { OBR.tool.removeMode(MODE_DEFAULT); } catch {}
   try { OBR.tool.removeMode(MODE_SCENE); } catch {}
   try { OBR.tool.removeMode(MODE_ROOM); } catch {}
+  try { OBR.tool.removeMode(MODE_PERFORMANCE); } catch {}
 }

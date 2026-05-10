@@ -307,7 +307,7 @@ async function loadIndex(): Promise<IndexFile> {
     // chips need them to resolve. Best-effort — first library that
     // 200s wins.
     try {
-      for (const base of bases) {
+      for (const base of sources.map((s) => s.base)) {
         try {
           const r = await fetch(`${base}/data/items-base.json`, { cache: "no-cache" });
           if (!r.ok) continue;
@@ -495,9 +495,12 @@ async function loadCategoryData(
   // Try every case variant in parallel — case-sensitive servers like
   // GitHub Pages 404 on the wrong case, so we have to send all
   // candidates and merge whichever 200s.
-  const filePathsForSrc = (s: string) => "fileBySource" in cat.data!
-    ? [cat.data!.fileBySource(s)]
-    : [cat.data!.file];
+  const filePathsForSrc = (s: string) => {
+    const data = cat.data!;
+    if ("fileBySource" in data) return [data.fileBySource(s)];
+    if ("file" in data) return [data.file];
+    return [];
+  };
   const candidatePaths = new Set<string>([
     ...filePathsForSrc(src),                  // lowercase
     ...filePathsForSrc(srcOriginal),          // original case

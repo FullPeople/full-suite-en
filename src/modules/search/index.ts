@@ -50,12 +50,12 @@ registerPanelBbox(PANEL_IDS.search, async () => {
 const POPOVER_ID = "com.full-suite-en/search-bar";
 const URL = assetUrl("search-bar.html");
 
-// Iframe is wider than the visible input row by ~20px so the side
-// drag-grip (which pokes out half-tucked-half-visible from the bar's
-// right end) lives inside the iframe rect — anything outside is
-// clipped by OBR.
-const BAR_W_IDLE = 300;
-const BAR_H_IDLE = 42;
+// Idle bar size MUST match `BAR_W_IDLE` / `BAR_H_IDLE` in
+// `src/modules/search/page.ts` — the iframe shrinks/grows the popover
+// via OBR.popover.setWidth/setHeight, and a mismatch makes the popover
+// resize on first input/clear (visible flicker, drag-grip clipping).
+const BAR_W_IDLE = 280;
+const BAR_H_IDLE = 40;
 const RIGHT_OFFSET = 200;
 const TOP_OFFSET = 12;
 

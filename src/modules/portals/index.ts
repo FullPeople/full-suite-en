@@ -1300,6 +1300,9 @@ export async function setupPortals(): Promise<void> {
               name: data.name,
               tag: data.tag,
               radius: cur.radius,
+              showName: cur.showName,
+              visible: cur.visible,
+              locked: cur.locked,
             };
           }
         });

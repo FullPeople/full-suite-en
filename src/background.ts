@@ -11,12 +11,15 @@ import {
 } from "./modules/characterCards";
 import { setupDice, teardownDice } from "./modules/dice";
 import { setupPortals, teardownPortals } from "./modules/portals";
+import { setupTrickster, teardownTrickster } from "./modules/trickster";
+import { setupCircleImage, teardownCircleImage } from "./modules/circleImage";
 import { setupBubbles, teardownBubbles } from "./modules/bubbles";
 import { setupStatusTracker, teardownStatusTracker } from "./modules/statusTracker";
 import { setupHpBar, teardownHpBar } from "./modules/hpBar";
 import { setupMetadataInspector, teardownMetadataInspector } from "./modules/metadata-inspector";
 import { setupVision, teardownVision } from "./modules/vision";
 import { setupCrossSceneCards } from "./modules/cross-scene-cards";
+import { setupPerfWindow } from "./modules/perfWindow";
 import { assetUrl } from "./asset-base";
 import { onViewportResize } from "./utils/viewportAnchor";
 import { STABLE_HIDES } from "./feature-flags";
@@ -136,6 +139,30 @@ const IS_MOBILE = isMobileDevice();
 //   • 全局搜索 / Global Search           (popover not registered)
 const BC_MOBILE_PRESENCE = "com.full-suite-en/mobile-presence";
 const seenMobilePlayers = new Set<string>();
+const ANNOUNCEMENT_MODAL_ID = "com.full-suite-en/dm-announcement";
+const LS_ANNOUNCEMENT_AUTO_DATE = "full-suite-en/announcement-auto-date";
+
+function todayKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function openDailyAnnouncement(): Promise<void> {
+  const today = todayKey();
+  try {
+    if (localStorage.getItem(LS_ANNOUNCEMENT_AUTO_DATE) === today) return;
+    localStorage.setItem(LS_ANNOUNCEMENT_AUTO_DATE, today);
+  } catch {}
+  try {
+    await OBR.modal.open({
+      id: ANNOUNCEMENT_MODAL_ID,
+      url: assetUrl("dm-announcement.html?auto=1"),
+      width: 560,
+      height: 580,
+    });
+  } catch (e) {
+    console.warn("[full-suite-en] daily announcement open failed", e);
+  }
+}
 
 function disabledFeaturesText(lang: "zh" | "en"): string {
   return lang === "zh"
@@ -313,38 +340,6 @@ registerPanelBbox(PANEL_IDS.clusterRow, async () => {
   } catch { return null; }
 });
 
-// Dice-history TRIGGER button bbox. Dice module's bottom-right d20
-// button — independent panel so the layout editor can show / move
-// it without touching the history popover above it. Width matches
-// HISTORY_TRIGGER_W in dice/index.ts (92px after the drag-grip
-// expansion).
-registerPanelBbox(PANEL_IDS.diceHistoryTrigger, async () => {
-  try {
-    const [vw, vh] = await Promise.all([
-      OBR.viewport.getWidth(),
-      OBR.viewport.getHeight(),
-    ]);
-    const userOff = getPanelOffset(PANEL_IDS.diceHistoryTrigger);
-    const W = 92;
-    const H = 64;
-    // Default base offsets must match dice/index.ts'
-    // HISTORY_TRIGGER_RIGHT_OFFSET (75) and
-    // HISTORY_TRIGGER_BOTTOM_OFFSET (5). The earlier `bottom = 0 - dy`
-    // was off by 5px which caused the drag-preview ghost to start at
-    // a y-position 5px below the actual rendered iframe — and after
-    // accumulated drags the panel could pin against the bottom edge
-    // because each ghost-vs-real mismatch nudged the offset further.
-    const right = 75 - userOff.dx;
-    const bottom = 5 - userOff.dy;
-    return {
-      left: vw - right - W,
-      top: vh - bottom - H,
-      width: W,
-      height: H,
-    };
-  } catch { return null; }
-});
-
 // Re-anchor cluster trigger + row on viewport resize. Same id + same url
 // → OBR updates each popover in place.
 onViewportResize(async () => {
@@ -402,8 +397,8 @@ OBR.onReady(() => {
     const panelIds = [
       PANEL_IDS.cluster,
       PANEL_IDS.clusterRow,
-      PANEL_IDS.diceHistoryTrigger,
       PANEL_IDS.diceHistory,
+      PANEL_IDS.perfWindow,
       PANEL_IDS.search,
       PANEL_IDS.initiative,
       PANEL_IDS.bestiaryPanel,
@@ -545,6 +540,8 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
     setup: async () => { await setupVision(); },
     teardown: async () => { await teardownVision(); },
   },
+  trickster: { setup: setupTrickster, teardown: teardownTrickster },
+  circleImage: { setup: setupCircleImage, teardown: teardownCircleImage },
   // Stable channel hides search + status-tracker until they're polished
   // enough for the public listing. Dev keeps them in.
   ...(STABLE_HIDES
@@ -564,10 +561,11 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
 type ModuleState = "off" | "starting" | "on" | "stopping";
 const moduleStatus = new Map<string, ModuleState>();
 
-async function syncModules() {
+async function syncModules(onlyIds?: Set<string>) {
   const state = getState();
   for (const [id, hooks] of Object.entries(modules)) {
     if (!hooks) continue;
+    if (onlyIds && !onlyIds.has(id)) continue;
     const wantOn = !!state.enabled[id as keyof typeof state.enabled];
     const status = moduleStatus.get(id) ?? "off";
     if (wantOn && status === "off") {
@@ -596,10 +594,29 @@ async function syncModules() {
   }
 }
 
+let lastEnabledSnapshot: Record<string, boolean> | null = null;
+function changedEnabledIds(): Set<string> | undefined {
+  const enabled = getState().enabled as Record<string, boolean>;
+  if (!lastEnabledSnapshot) {
+    lastEnabledSnapshot = { ...enabled };
+    return undefined;
+  }
+  const changed = new Set<string>();
+  for (const id of Object.keys(enabled)) {
+    if (enabled[id] !== lastEnabledSnapshot[id]) changed.add(id);
+  }
+  lastEnabledSnapshot = { ...enabled };
+  return changed.size > 0 ? changed : new Set<string>();
+}
+
 OBR.onReady(async () => {
   // Sync state, then open cluster + activate all enabled modules.
   startSceneSync();
-  onStateChange(() => syncModules());
+  onStateChange(() => {
+    const changed = changedEnabledIds();
+    if (changed && changed.size === 0) return;
+    void syncModules(changed);
+  });
 
   // Mobile-presence: every client listens; phones additionally
   // broadcast their flag at scene-ready so others know which player
@@ -611,6 +628,9 @@ OBR.onReady(async () => {
   // module so it's a no-op when the user hasn't enabled the toggle.
   void setupCrossSceneCards();
 
+  // Perf window — per-client opt-in via localStorage.
+  void setupPerfWindow();
+
   // (metadataInspector is now wired through the module registry —
   // its enable flag lives in state.enabled.metadataInspector and is
   // toggled in Settings → 元数据检查.)
@@ -619,8 +639,10 @@ OBR.onReady(async () => {
     try {
       if (await OBR.scene.isReady()) {
         await openCluster();
+        changedEnabledIds();
         await syncModules();
         void announceMobilePresence();
+        void openDailyAnnouncement();
         // (Auto-show removed — the cluster's megaphone button drives
       // the announcement modal now; see cluster.ts.)
       } else {
@@ -634,6 +656,7 @@ OBR.onReady(async () => {
       await openCluster();
       await syncModules();
       void announceMobilePresence();
+      void openDailyAnnouncement();
       // (Auto-show removed — the cluster's megaphone button drives
       // the announcement modal now; see cluster.ts.)
     } else {

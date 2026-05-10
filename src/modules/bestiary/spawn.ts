@@ -29,7 +29,21 @@ async function readBestiaryAutoHide(): Promise<boolean> {
   return true;
 }
 
-const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
+async function readBestiaryAutoName(): Promise<boolean> {
+  try {
+    const meta = await OBR.scene.getMetadata();
+    const s = meta[SUITE_STATE_KEY] as { bestiaryAutoName?: boolean } | undefined;
+    if (typeof s?.bestiaryAutoName === "boolean") return s.bestiaryAutoName;
+  } catch {}
+  // Default OFF — DM opts in via the panel toggle.
+  return false;
+}
+
+// Suite-owned namespace for HP/AC bubbles. Newly-spawned tokens write
+// only to this key; the upstream "Stat Bubbles for D&D" extension key
+// is no longer populated unprompted (its presence is honoured for
+// reads / mirrored writes elsewhere, see modules/bubbles/index.ts).
+const BUBBLES_META = "com.full-suite-en/bubbles/data";
 const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
 const INITIATIVE_META = "com.initiative-tracker/data";
 const INITIATIVE_MODKEY = "com.initiative-tracker/dexMod";
@@ -158,6 +172,7 @@ export async function spawnMonster(
   // initiative manually — useful when pre-staging tokens during prep.
   const autoInit = await readBestiaryAutoInit();
   const autoHide = await readBestiaryAutoHide();
+  const autoName = await readBestiaryAutoName();
   const meta: Record<string, unknown> = {
     [BUBBLES_META]: {
       "health": monster.hp,
@@ -207,6 +222,18 @@ export async function spawnMonster(
     .layer("CHARACTER")
     .metadata(meta)
     .build();
+
+  // When auto-name is on, prefill the OBR-native plainText label so
+  // players see the monster's display name under the token without
+  // the DM needing to click-sync per token.
+  if (autoName) {
+    const anyItem = item as any;
+    anyItem.text = {
+      ...(anyItem.text ?? {}),
+      type: anyItem.text?.type ?? "PLAIN",
+      plainText: monster.name,
+    };
+  }
 
   await OBR.scene.items.addItems([item]);
 

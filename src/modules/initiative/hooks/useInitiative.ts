@@ -289,7 +289,9 @@ export function useInitiative() {
     refreshCombat();
 
     const unsubItems = OBR.scene.items.onChange(() => refreshItems());
-    const unsubMeta = OBR.scene.onMetadataChange(() => refreshCombat());
+    const unsubMeta = OBR.scene.onMetadataChange((meta) => {
+      if (COMBAT_STATE_KEY in meta) refreshCombat();
+    });
 
     // Receiver picks its own language. The DM's broadcast no longer carries
     // a `lang` field — each client (DM + every player) reads its local

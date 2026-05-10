@@ -24,6 +24,7 @@ import OBR, { Image, isImage } from "@owlbear-rodeo/sdk";
 import {
   PLUGIN_ID,
   STATUS_BUFFS_KEY,
+  STATUS_BUFF_ROUNDS_KEY,
   BuffDef,
   textColorFor,
 } from "./modules/statusTracker/types";
@@ -172,6 +173,15 @@ async function applyBuff(tokenId: string): Promise<void> {
         const list: string[] = Array.isArray(cur) ? cur.filter((x: any) => typeof x === "string") : [];
         if (!list.includes(buff.id)) list.push(buff.id);
         (d.metadata as any)[STATUS_BUFFS_KEY] = list;
+        const rounds = Math.floor(Number(buff.rounds ?? 0));
+        if (Number.isFinite(rounds) && rounds > 0) {
+          const curRounds = (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY];
+          const map = curRounds && typeof curRounds === "object" && !Array.isArray(curRounds)
+            ? { ...(curRounds as Record<string, number>) }
+            : {};
+          map[buff.id] = rounds;
+          (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = map;
+        }
       }
     });
   } catch (e) {
@@ -189,6 +199,12 @@ async function removeBuff(tokenId: string): Promise<void> {
         const idx = list.indexOf(buff.id);
         if (idx >= 0) list.splice(idx, 1);
         (d.metadata as any)[STATUS_BUFFS_KEY] = list;
+        const curRounds = (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY];
+        if (curRounds && typeof curRounds === "object" && !Array.isArray(curRounds)) {
+          const map = { ...(curRounds as Record<string, number>) };
+          delete map[buff.id];
+          (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = map;
+        }
       }
     });
   } catch (e) {
@@ -201,6 +217,7 @@ async function clearAll(tokenId: string): Promise<void> {
     await OBR.scene.items.updateItems([tokenId], (drafts) => {
       for (const d of drafts) {
         (d.metadata as any)[STATUS_BUFFS_KEY] = [];
+        (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = {};
       }
     });
   } catch (e) {
@@ -220,6 +237,12 @@ async function removeBuffById(tokenId: string, buffId: string): Promise<void> {
         const idx = list.indexOf(buffId);
         if (idx >= 0) list.splice(idx, 1);
         (d.metadata as any)[STATUS_BUFFS_KEY] = list;
+        const curRounds = (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY];
+        if (curRounds && typeof curRounds === "object" && !Array.isArray(curRounds)) {
+          const map = { ...(curRounds as Record<string, number>) };
+          delete map[buffId];
+          (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = map;
+        }
       }
     });
   } catch (e) {

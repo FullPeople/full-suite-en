@@ -8,6 +8,7 @@ import { t } from "../../i18n";
 import { getLocalLang, onLangChange, startSceneSync, refreshFromScene, getState, setState, onStateChange } from "../../state";
 import { bindPanelDrag } from "../../utils/panelDrag";
 import { PANEL_IDS } from "../../utils/panelLayout";
+import { installDebugOverlay } from "../../utils/debugOverlay";
 import "./styles.css";
 
 // Drag-spawn broadcast IDs. Mirrored in:
@@ -23,8 +24,11 @@ const _tt = (k: Parameters<typeof t>[1]) => t(_lang, k);
 // Bubbles + initiative metadata keys — same constants as spawn.ts. The
 // picker mode (?pickerForItemId=…) writes to these so the bound token
 // gets the chosen monster's HP / AC / DEX-mod alongside the slug
-// reference.
-const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
+// reference. Suite owns its own key now; the upstream "Stat Bubbles
+// for D&D" key is kept here only so we can mirror writes onto tokens
+// that already had the upstream extension's metadata.
+const BUBBLES_META = "com.full-suite-en/bubbles/data";
+const EXTERNAL_BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
 const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
 const INITIATIVE_MODKEY = "com.initiative-tracker/dexMod";
 const BESTIARY_SLUG_KEY = "com.bestiary/slug";
@@ -75,7 +79,7 @@ async function bindMonsterToTokens(mon: ParsedMonster, itemIds: string[]): Promi
     await OBR.scene.items.updateItems(itemIds, (drafts) => {
       for (const d of drafts) {
         d.metadata[BESTIARY_SLUG_KEY] = slug;
-        d.metadata[BUBBLES_META] = {
+        const seed = {
           health: mon.hp,
           "max health": mon.hp,
           "temporary health": 0,
@@ -83,9 +87,9 @@ async function bindMonsterToTokens(mon: ParsedMonster, itemIds: string[]): Promi
           // `hide: true` is the EXTERNAL "Stat Bubbles for D&D"
           // extension's "Dungeon Master Only" toggle — players never
           // see the bubbles for this token at all when this is set.
-          // We set it by default on bestiary-bound monsters so DMs
-          // who use the external Stat Bubbles plugin get DM-only
-          // bubbles automatically.
+          // Setting it here mirrors onto the upstream key (when
+          // present) so DMs running the external Stat Bubbles plugin
+          // get DM-only bubbles automatically on bestiary monsters.
           hide: true,
           // `locked: true` is the SUITE'S OWN bubbles module flag
           // (different from the external plugin's hide). Combined
@@ -95,6 +99,13 @@ async function bindMonsterToTokens(mon: ParsedMonster, itemIds: string[]): Promi
           // plugin reads hide, suite plugin reads locked.
           locked: true,
         };
+        d.metadata[BUBBLES_META] = seed;
+        // Mirror to the upstream key only when it was already
+        // populated on this token (e.g. token had Stat Bubbles data
+        // from before this version).
+        if (d.metadata[EXTERNAL_BUBBLES_META] != null) {
+          d.metadata[EXTERNAL_BUBBLES_META] = seed;
+        }
         d.metadata[BUBBLES_NAME] = mon.name;
         d.metadata[INITIATIVE_MODKEY] = mon.dexMod;
         d.name = mon.name;
@@ -178,10 +189,16 @@ function App() {
   const [autoHide, setAutoHide] = useState<boolean>(() =>
     getState().bestiaryAutoHide !== false,
   );
+  // Auto-name toggle — when ON, freshly spawned monsters write their
+  // display name into the OBR-native plainText label. Default OFF.
+  const [autoName, setAutoName] = useState<boolean>(() =>
+    getState().bestiaryAutoName === true,
+  );
   useEffect(() => {
     const unsub = onStateChange(() => {
       setAutoInit(getState().bestiaryAutoInitiative !== false);
       setAutoHide(getState().bestiaryAutoHide !== false);
+      setAutoName(getState().bestiaryAutoName === true);
     });
     return unsub;
   }, []);
@@ -202,9 +219,7 @@ function App() {
   useEffect(() => {
     OBR.player.getRole().then(setRole);
     readSuiteDataVersion().then(setDataVersion);
-    const unsub = OBR.scene.onMetadataChange(() => {
-      readSuiteDataVersion().then(setDataVersion);
-    });
+    const unsub = onStateChange((s) => setDataVersion(s.dataVersion));
 
     // Pull suite state (scene metadata → suite cache) BEFORE
     // loadAllMonsters so getEnabledLibraryBases() inside data.ts
@@ -486,6 +501,20 @@ function App() {
               {lang === "zh" ? "自动先攻" : "Auto-init"}
             </button>
           )}
+          {role === "GM" && (
+            <button
+              class={`auto-init-toggle ${autoName ? "on" : "off"}`}
+              onClick={async () => {
+                await setState({ bestiaryAutoName: !autoName });
+              }}
+              title={lang === "zh"
+                ? "加入场景时自动把怪物名字写到 token 的 plainText（OBR 原生显示在 token 下方的小字标签）"
+                : "Auto-fill the token's native plainText label with the monster name"}
+              aria-pressed={autoName}
+            >
+              {lang === "zh" ? "自动命名" : "Auto-name"}
+            </button>
+          )}
           <button class="sort-btn" onClick={toggleSort} title={t(lang, "bestiarySortByCR")}>
             CR {sortDesc ? "↓" : "↑"}
           </button>
@@ -673,7 +702,10 @@ function PluginGate() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    OBR.onReady(() => setReady(true));
+    OBR.onReady(() => {
+      installDebugOverlay();
+      setReady(true);
+    });
   }, []);
 
   if (!ready) return <div class="app"><div class="empty">{_tt("bestiaryLoading")}</div></div>;

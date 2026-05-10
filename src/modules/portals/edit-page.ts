@@ -183,7 +183,11 @@ async function toggleLock() {
     // deleted from the scene by normal user interaction. Same flag
     // the suite sets on freshly-spawned portal previews.
     await OBR.scene.items.updateItems([portalId], (drafts) => {
-      for (const d of drafts) d.locked = next;
+      for (const d of drafts) {
+        d.locked = next;
+        const meta = (d.metadata[PORTAL_KEY] as PortalMeta | undefined) ?? { name: "", tag: "", radius: 70 };
+        d.metadata[PORTAL_KEY] = { ...meta, locked: next };
+      }
     });
   } catch (e) {
     console.warn("[obr-suite/portals] toggle lock failed", e);
@@ -199,7 +203,11 @@ async function toggleVisible() {
   applyVisibleButtonState();
   try {
     await OBR.scene.items.updateItems([portalId], (drafts) => {
-      for (const d of drafts) d.visible = next;
+      for (const d of drafts) {
+        d.visible = next;
+        const meta = (d.metadata[PORTAL_KEY] as PortalMeta | undefined) ?? { name: "", tag: "", radius: 70 };
+        d.metadata[PORTAL_KEY] = { ...meta, visible: next };
+      }
     });
   } catch (e) {
     console.warn("[obr-suite/portals] toggle visible failed", e);
@@ -247,9 +255,12 @@ async function loadCurrent() {
       inpName.value = originalName;
       inpTag.value = originalTag;
       showName = meta.showName === true;
+      isVisible = meta.visible !== false;
+      isLocked = meta.locked === true;
     }
-    isLocked = !!it.locked;
-    isVisible = it.visible !== false;
+    // Fallback to item properties if not in meta
+    isLocked = isLocked || !!it.locked;
+    isVisible = isVisible && (it.visible !== false);
     applyLockButtonState();
     applyVisibleButtonState();
     applyTextButtonState();
@@ -288,6 +299,8 @@ async function autoSave() {
           tag,
           radius: cur.radius,
           showName,
+          visible: isVisible,
+          locked: isLocked,
         };
         const txt = (d as any).text;
         if (txt) txt.plainText = showName ? name : "";

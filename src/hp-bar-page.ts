@@ -6,6 +6,7 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { bindPanelDrag } from "./utils/panelDrag";
 import { PANEL_IDS } from "./utils/panelLayout";
+import { installDebugOverlay } from "./utils/debugOverlay";
 import {
   parseStatInput,
   readBubbles,
@@ -104,6 +105,7 @@ lockBtn?.addEventListener("click", async () => {
 });
 
 OBR.onReady(async () => {
+  installDebugOverlay();
   try {
     isGM = (await OBR.player.getRole()) === "GM";
   } catch {}

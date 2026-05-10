@@ -317,7 +317,7 @@ export function formatTagsClickable(s: string): string {
         : parsed.spec.expression;
       out += `<span class="rollable" data-expr="${exprAttr}" data-label="${labelAttr}" title="${escapeAttr(title)}">${escapeHtml(parsed.spec.display)}</span>`;
     } else {
-      out += escapeHtml(parsed.display);
+      out += escapeHtml(parsed.kind === "text" ? parsed.display : parsed.spec.display);
     }
     i = re.lastIndex;
   }

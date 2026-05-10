@@ -5,6 +5,7 @@ import { bindRollableContextMenu } from "../dice/context-menu";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
 import { bindPanelDrag } from "../../utils/panelDrag";
 import { PANEL_IDS } from "../../utils/panelLayout";
+import { installDebugOverlay } from "../../utils/debugOverlay";
 import {
   parseStatInput,
   readBubbles,
@@ -867,6 +868,7 @@ bindRollableContextMenu(
 );
 
 OBR.onReady(async () => {
+  installDebugOverlay();
   subscribeToSfx();
   // Capture the popover's opened height as the ceiling for future resizes.
   if (window.innerHeight > 0) INFO_MAX_HEIGHT = window.innerHeight;

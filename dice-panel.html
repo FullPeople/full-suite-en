@@ -484,67 +484,191 @@ html,body{
 
 .empty-state{text-align:center;color:var(--text-dim);font-size:12px;padding:24px 12px}
 
-/* === History === */
-.history-list{display:flex;flex-direction:column;gap:6px}
-.history-item{
+/* === History — visual vocabulary mirrors the bottom-right history
+   modal (dice-history.html) so a roll looks the same in both UIs.
+   Dice = PNG icons inside pill-shaped chips; collective rolls collapse
+   into a member-strip with one card per token; repeat rolls into a
+   flow-wrap repeat-strip; solo rolls show a single formula line.
+   Active replay tints the entry's left border + adds a glow. */
+.history-list{display:flex;flex-direction:column;gap:4px}
+
+.entry{
+  display:flex;align-items:center;gap:5px;
+  /* Even tighter than before — another 20% drop. The dice-action
+     panel is the "scrolling archive" view, so density matters more
+     than browse comfort here (the bottom-right popover is the
+     comfortable view). Collective + wrapping dice strips still grow
+     naturally. */
+  padding:0 6px;
   background:var(--bg-card);
   border:1px solid var(--border);
-  border-left:3px solid var(--accent);
-  border-radius:6px;
-  padding:6px 10px;
+  border-left:2px solid var(--accent);
+  border-radius:4px;
+  cursor:pointer;
+  transition:background .12s, border-color .12s, transform .08s;
 }
-.history-item.crit{border-left-color:#ffcc33}
-.history-item.fail{border-left-color:#ff6b6b}
-.history-head{
-  display:flex;justify-content:space-between;align-items:baseline;
-  font-size:11.5px;color:var(--text-dim);
+.entry:hover{
+  background:rgba(93,173,226,0.08);
+  border-color:rgba(93,173,226,0.32);
 }
-.history-player{color:var(--text);font-weight:700}
-.history-formula{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--text-dim);margin-top:2px}
-.history-rolls{
-  font-family:ui-monospace,monospace;font-size:12px;color:var(--text);
-  display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:2px;
+.entry:active{transform:scale(0.99)}
+.entry.crit{border-left-color:#ffcc33}
+.entry.fail{border-left-color:#ff6b6b}
+.entry.hidden-roll{
+  background:linear-gradient(180deg, rgba(110,55,160,0.30), rgba(60,30,95,0.45));
+  border-left-color:rgba(180,110,225,0.85);
 }
-.history-die{
-  display:inline-flex;align-items:center;justify-content:center;
-  min-width:22px;height:20px;padding:0 6px;
-  background:var(--bg-strong);border:1px solid var(--border);border-radius:4px;
-  font-size:11.5px;font-weight:700;
+.entry.replay-on{
+  border-color:var(--player-color, #5dade2);
+  box-shadow:0 0 0 1px var(--player-color, #5dade2), 0 0 12px rgba(93,173,226,0.35);
+  background:linear-gradient(180deg, rgba(93,173,226,0.10), var(--bg-card));
 }
-.history-die.high{color:#ffcc33}
-.history-die.low{color:#ff6b6b}
-.history-die.loser{opacity:0.4;text-decoration:line-through}
-.history-total{font-size:14px;font-weight:800;color:var(--accent-on);margin-left:auto}
+.coll-entry{
+  border-left-color:rgba(46,204,113,0.55);
+}
 
-/* Repeat-roll pills — `repeat(N, …)` iterations laid out as inline
-   pills that flow left-to-right and wrap to a new line only when
-   they can't fit. Matches the user's "顺序排列除非排不下再换行
-   (flow)" call. Each pill = #N · dice chips · ±mod · row total. */
-.repeat-pill-flow{
-  display:flex;flex-wrap:wrap;
-  gap:4px;margin-top:3px;
+.entry .body{
+  flex:1;min-width:0;
+  display:flex;flex-direction:column;gap:0;
+  line-height:1.0;
 }
-.repeat-pill{
-  display:inline-flex;align-items:center;
-  gap:4px;padding:2px 6px;
-  background:var(--bg-strong);
-  border:1px solid var(--border);
+.entry .line1{
+  display:flex;align-items:baseline;justify-content:space-between;gap:4px;
+  line-height:1.0;
+}
+.entry .player{
+  font-size:9px;font-weight:700;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  min-width:0;flex:1;
+  line-height:1.0;
+}
+.entry .ago{
+  font-size:7.5px;color:var(--text-dim);font-weight:600;
+  white-space:nowrap;flex-shrink:0;
+}
+.entry .dark-tag{
+  flex-shrink:0;display:inline-block;
+  padding:1px 5px;
+  background:rgba(120,60,180,0.7);
+  border-radius:3px;
+  font-size:9px;font-weight:800;
+  color:#fff;letter-spacing:0.4px;
+  text-transform:uppercase;
+  margin-right:4px;
+}
+.entry .coll-tag{
+  flex-shrink:0;display:inline-block;
+  padding:1px 5px;
+  background:rgba(46,204,113,0.55);
+  border-radius:3px;
+  font-size:9px;font-weight:800;
+  color:#fff;letter-spacing:0.4px;
+  margin-right:4px;
+}
+
+.entry .formula{
+  display:flex;align-items:flex-end;gap:4px;
+  font-size:8.5px;
+  margin-top:0;
+}
+.entry .dice-list{
+  flex:1 1 auto;
+  display:flex;flex-wrap:wrap;align-items:center;
+  gap:2px;min-width:0;
+}
+.die-chip{
+  display:inline-flex;align-items:center;gap:1px;
+  padding:0 3px 0 1px;
   border-radius:6px;
+  background:rgba(255,255,255,0.06);
+  font-family:ui-monospace,"SF Mono","JetBrains Mono",Consolas,monospace;
+  font-weight:700;color:var(--text);
+  font-size:8px;
+  flex-shrink:0;height:11px;
+}
+.die-chip img{width:9px;height:9px;display:block;-webkit-user-drag:none}
+.die-chip.crit{color:#ffd34d;background:rgba(255,200,0,0.16);box-shadow:0 0 6px rgba(255,200,0,0.45)}
+.die-chip.fail{color:#ff8a7a;background:rgba(231,76,60,0.18)}
+.die-chip.loser{opacity:0.4;text-decoration:line-through}
+.die-chip.subtract{opacity:0.55}
+
+.entry .mod{
+  font-family:ui-monospace,monospace;font-size:8px;font-weight:700;
+  color:var(--text-dim);flex-shrink:0;
+}
+.entry .eq{color:var(--text-dim);flex-shrink:0;font-weight:700;font-size:8px}
+.entry .total{
+  font-family:ui-monospace,monospace;font-size:9.5px;font-weight:900;
+  color:var(--accent);flex-shrink:0;
+}
+.entry .label-tag{
+  font-size:7.5px;color:var(--text-dim);font-style:italic;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  min-width:0;flex:0 1 auto;
+  margin-left:2px;
+}
+
+.entry .member-strip{
+  display:flex;flex-wrap:wrap;align-items:center;
+  gap:3px;margin-top:1px;
+}
+.member-card{
+  display:inline-flex;align-items:center;
+  gap:3px;
+  padding:2px 7px 2px 4px;
+  border-radius:8px;
+  background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.10);
+  white-space:nowrap;flex-shrink:0;
+  font-size:10.5px;
+  transition:background .12s, border-color .12s;
+}
+.member-card:hover{
+  background:rgba(93,173,226,0.14);
+  border-color:rgba(93,173,226,0.32);
+}
+.member-card.crit{
+  background:rgba(255,200,0,0.14);
+  border-color:rgba(255,200,0,0.42);
+}
+.member-card.fail{
+  background:rgba(231,76,60,0.14);
+  border-color:rgba(231,76,60,0.40);
+}
+.member-card.hidden-roll{
+  background:rgba(155,89,182,0.18);
+  border-color:rgba(180,110,225,0.45);
+}
+.member-card .die-chip{
+  background:transparent;
+  border-radius:0;
+  padding:0;height:auto;
+  font-size:10px;
+}
+.member-card .die-chip img{width:13px;height:13px}
+.member-card .mod{font-size:10px}
+.member-card .eq{font-size:10px;color:var(--text-dim)}
+.member-card .total{
   font-family:ui-monospace,monospace;
-  font-size:11px;
+  font-size:11.5px;font-weight:900;
+  color:var(--accent);
+  margin-left:2px;
 }
-.repeat-pill .history-die{
-  min-width:18px;height:16px;padding:0 4px;font-size:10.5px;
-  background:transparent;border:none;
+.member-card.crit .total{color:#ffd34d}
+.member-card.fail .total{color:#ff8a7a}
+
+.entry .repeat-strip{
+  display:flex;align-items:center;
+  gap:3px;margin-top:1px;
 }
-.repeat-pill .history-total{
-  font-size:11.5px;font-weight:800;color:var(--accent-on);margin-left:0;
+.entry .repeat-strip.is-flow{
+  flex-direction:row;flex-wrap:wrap;
 }
-.repeat-pill-idx{
-  font-size:9.5px;font-weight:700;color:var(--text-dim);
-  min-width:16px;text-align:right;
+.entry .repeat-strip .member-card{padding-left:4px}
+.repeat-idx{
+  font-size:9.5px;color:var(--text-dim);font-weight:700;
+  min-width:18px;text-align:right;margin-right:2px;
 }
-.repeat-pill-mod{font-size:10.5px;color:var(--text-dim)}
 
 .history-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .seg{

@@ -5,6 +5,7 @@ import { bindRollableContextMenu } from "../dice/context-menu";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
 import { bindPanelDrag } from "../../utils/panelDrag";
 import { PANEL_IDS } from "../../utils/panelLayout";
+import { installDebugOverlay } from "../../utils/debugOverlay";
 import {
   parseStatInput,
   readBubbles,
@@ -119,7 +120,13 @@ function classesStr(d: any): string {
 }
 
 let currentCardId: string | null = null;
+let currentRoomId: string | null = null;
 const cardCache = new Map<string, any>();
+
+// Mirrored from panel-page.ts. Receiving with a matching cardId means
+// another client uploaded / refreshed / imported the same card and we
+// should drop our cache + re-fetch.
+const BC_CARD_UPDATED = "com.full-suite-en/cc-card-updated";
 
 // Cached role lookup. The DM-only lock button at the right end of the
 // stat banner reads this. OBR.onReady below populates it before any
@@ -128,6 +135,7 @@ let cachedIsGM = false;
 
 async function showCard(cardId: string, roomId: string) {
   currentCardId = cardId;
+  currentRoomId = roomId;
 
   // Cache hit: render instantly, 0 network wait, 0 intermediate frame.
   const cached = cardCache.get(cardId);
@@ -751,6 +759,7 @@ bindRollableContextMenu(
 );
 
 OBR.onReady(async () => {
+  installDebugOverlay();
   subscribeToSfx();
   // Cache the player's role BEFORE first render so the DM-only lock
   // button appears on first paint instead of waiting for a re-render.
@@ -778,5 +787,18 @@ OBR.onReady(async () => {
     if (typeof p.itemId === "string") boundItemId = p.itemId;
     else if (p.itemId === null) boundItemId = null;
     if (p.cardId && p.roomId) showCard(String(p.cardId), String(p.roomId));
+  });
+
+  // Multi-client sync — when another client refreshes / imports the
+  // currently-shown card, drop our cache entry and re-fetch so the
+  // small popover preview reflects the new data.json without the user
+  // needing to re-open it.
+  OBR.broadcast.onMessage(BC_CARD_UPDATED, (ev: any) => {
+    const payload = ev?.data as { cardId?: string } | undefined;
+    if (!payload?.cardId) return;
+    cardCache.delete(payload.cardId);
+    if (currentCardId === payload.cardId && currentRoomId) {
+      void showCard(payload.cardId, currentRoomId);
+    }
   });
 });

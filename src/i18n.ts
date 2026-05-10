@@ -172,6 +172,7 @@ const TR: Dict = {
   },
   diceHistoryEmpty: { zh: "还没有掷骰记录", en: "No roll history yet" },
   diceHistoryAll: { zh: "全部", en: "All" },
+  diceHistoryReplayTooltip: { zh: "点击：在 token 上回放气泡", en: "Click: replay bubble over the token" },
   diceComboBtnRoll: { zh: "投掷", en: "Roll" },
   diceComboBtnDark: { zh: "暗骰", en: "Dark" },
   diceComboBtnEdit: { zh: "编辑", en: "Edit" },

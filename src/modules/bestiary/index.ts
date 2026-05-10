@@ -110,7 +110,10 @@ const BC_MONSTER_DRAG_CANCEL = "com.full-suite-en/bestiary-drag-cancel";
 
 // Bubbles + Initiative metadata keys used when binding (must match
 // spawn.ts so existing tokens look identical to freshly-spawned ones).
-const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
+// Suite-owned namespace + upstream fallback so unmigrated scenes still
+// surface the lock state correctly.
+const BUBBLES_META = "com.full-suite-en/bubbles/data";
+const EXTERNAL_BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
 const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
 const INITIATIVE_MODKEY = "com.initiative-tracker/dexMod";
 
@@ -244,13 +247,21 @@ async function handleSelection(selection: string[] | undefined) {
   }
   let slug: string | null = null;
   let ownsItem = false;
+  let locked = true;
   const itemId = selection[0];
   try {
     const items = await OBR.scene.items.getItems(selection);
-    const m = items[0]?.metadata?.[BESTIARY_SLUG_KEY];
+    const item = items[0] as any;
+    const m = item?.metadata?.[BESTIARY_SLUG_KEY];
     if (typeof m === "string") slug = m;
-    const createdUserId = (items[0] as any)?.createdUserId;
-    if (items[0] && createdUserId === bestiaryMyId) ownsItem = true;
+    const createdUserId = item?.createdUserId;
+    if (item && createdUserId === bestiaryMyId) ownsItem = true;
+    const bubblesMeta = item?.metadata?.[BUBBLES_META]
+      ?? item?.metadata?.[EXTERNAL_BUBBLES_META];
+    if (bubblesMeta && typeof bubblesMeta === "object") {
+      const raw = (bubblesMeta as Record<string, unknown>)["locked"];
+      locked = raw === undefined ? true : !!raw;
+    }
   } catch (e) {
     console.warn("[obr-suite/bestiary] handleSelection getItems failed", e);
   }
@@ -262,7 +273,7 @@ async function handleSelection(selection: string[] | undefined) {
   // "allowPlayerMonsters" flag (Settings → 全局搜索) is intentionally
   // NOT consulted here — that flag now strictly gates search-result
   // visibility, NOT the auto-popup.
-  const canShow = bestiaryRole === "GM" || ownsItem;
+  const canShow = bestiaryRole === "GM" || (ownsItem && !locked);
   if (!canShow) {
     if (currentInfoSlug) await hideInfo();
     return;

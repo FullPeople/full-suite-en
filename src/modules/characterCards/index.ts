@@ -1,5 +1,6 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
+import { IS_MOBILE } from "../../feature-flags";
 import { onViewportResize } from "../../utils/viewportAnchor";
 import {
   PANEL_IDS,
@@ -69,6 +70,8 @@ const ICON_URL = assetUrl("cc-icon.svg");
 
 const BIND_META = `${PLUGIN_ID}/boundCardId`;
 const SCENE_META_KEY = `${PLUGIN_ID}/list`;
+const BUBBLES_META_KEY = "com.full-suite-en/bubbles/data";
+const EXTERNAL_BUBBLES_META_KEY = "com.owlbear-rodeo-bubbles-extension/metadata";
 const AUTO_INFO_KEY = "character-cards/auto-info";
 const TOGGLE_MSG = `${PLUGIN_ID}/auto-info-toggled`;
 const INFO_SHOW_MSG = `${PLUGIN_ID}/info-show`;
@@ -94,6 +97,8 @@ let currentInfoCard: string | null = null;
 // URL would force OBR to reload the iframe).
 let currentInfoItemId: string | null = null;
 let panelOpen = false;
+let ccMyId = "";
+let ccRole: "GM" | "PLAYER" = "PLAYER";
 
 function isAutoInfoEnabled(): boolean {
   try {
@@ -106,7 +111,26 @@ function isAutoInfoEnabled(): boolean {
 // button is the only way in. The panel-page itself listens for the
 // "panel-open" broadcast and calls setMaximized(true), which sets up the
 // popover-wide layout.
+//
+// Mobile is BLOCKED at the entry-point: cluster-row.ts already hides
+// the trigger button, but other entry points (CapsLock shortcut,
+// in-iframe broadcasts, future plug-points) shouldn't be able to
+// reach the heavy fullscreen panel. The Preact tree mounts a dozen
+// rAFs and consumes ~80MB on a phone — gating here is defense-in-
+// depth, not a UX choice.
 async function openMainPopover() {
+  if (IS_MOBILE) {
+    // Idempotent guard. Show a one-shot info toast so the user
+    // understands why nothing happened (e.g. they tapped a CapsLock-
+    // bound external keyboard while in OBR mobile).
+    try {
+      await OBR.notification.show(
+        "Character Card panel is disabled on mobile (performance).",
+        "INFO",
+      );
+    } catch {}
+    return;
+  }
   try {
     await OBR.modal.open({
       id: PANEL_MODAL_ID,
@@ -128,6 +152,7 @@ async function closeMainPopover() {
 }
 
 async function toggleMainPanel() {
+  if (IS_MOBILE) { await openMainPopover(); return; } // shows the toast
   if (panelOpen) await closeMainPopover();
   else await openMainPopover();
 }
@@ -231,10 +256,23 @@ async function handleSelection(selection: string[] | undefined) {
     return;
   }
   let boundId: string | null = null;
+  let ownsItem = false;
+  let locked = true; // default locked
+  const itemId = selection[0];
   try {
     const items = await OBR.scene.items.getItems(selection);
-    const m = items[0]?.metadata?.[BIND_META];
+    const item = items[0];
+    const m = item?.metadata?.[BIND_META];
     if (typeof m === "string") boundId = m;
+    const createdUserId = (item as any)?.createdUserId;
+    if (item && createdUserId === ccMyId) ownsItem = true;
+    // Check bubbles lock state — fall back to upstream key for scenes
+    // that haven't been migrated yet.
+    const bubblesMeta = item?.metadata?.[BUBBLES_META_KEY]
+      ?? item?.metadata?.[EXTERNAL_BUBBLES_META_KEY];
+    if (bubblesMeta && typeof bubblesMeta === "object" && "locked" in bubblesMeta) {
+      locked = !!bubblesMeta.locked;
+    }
   } catch {}
   if (!boundId) {
     if (currentInfoCard) await hideInfo();
@@ -242,6 +280,12 @@ async function handleSelection(selection: string[] | undefined) {
   }
   const known = await getSceneCardIds();
   if (!known.has(boundId)) {
+    if (currentInfoCard) await hideInfo();
+    return;
+  }
+  // Permission gate — only DM, owners, or if unlocked
+  const canShow = ccRole === "GM" || ownsItem || !locked;
+  if (!canShow) {
     if (currentInfoCard) await hideInfo();
     return;
   }
@@ -255,6 +299,12 @@ async function handleSelection(selection: string[] | undefined) {
 }
 
 export async function setupCharacterCards(): Promise<void> {
+  try {
+    const p = await OBR.player.getRole();
+    ccRole = (p as "GM" | "PLAYER") || "PLAYER";
+    ccMyId = await OBR.player.getId();
+  } catch {}
+
   // The main panel opens/closes on broadcast from the cluster button or
   // from the Shift keyboard shortcut registered below.
   unsubs.push(
@@ -370,8 +420,9 @@ export async function setupCharacterCards(): Promise<void> {
   // Hide info if the bound card was deleted from scene metadata, or its
   // host token was removed.
   unsubs.push(
-    OBR.scene.onMetadataChange(async () => {
+    OBR.scene.onMetadataChange(async (meta) => {
       if (!currentInfoCard) return;
+      if (!("com.character-cards/list" in meta)) return;
       const known = await getSceneCardIds();
       if (!known.has(currentInfoCard)) await hideInfo();
     })

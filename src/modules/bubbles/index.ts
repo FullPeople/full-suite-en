@@ -67,15 +67,21 @@ const DEFAULT_VERTICAL_OFFSET = -20;
 // tables can pick their own granularity.
 export const LS_BUBBLES_PLAYER_THRESHOLD = `${PLUGIN_ID}/player-threshold`;
 const DEFAULT_PLAYER_THRESHOLD = 25;
+const SCENE_BUBBLES_SETTINGS_KEY = `${PLUGIN_ID}/settings`;
 
 // Initiative-tracker scene metadata key — bubbles reads it to decide
 // whether locked tokens should show their bar to players right now
 // (during prep / combat) or stay hidden (idle).
 const COMBAT_STATE_KEY = "com.initiative-tracker/combat";
 
-// Compatibility namespace — shared with the upstream extension so a
-// scene previously using it migrates transparently.
-export const BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
+// Suite-owned HP/AC namespace. The upstream "Stat Bubbles for D&D"
+// extension key is kept as a read fallback (so a scene previously
+// using it still renders) and writes mirror to it only when it's
+// already present, so existing external-plugin tables stay in sync
+// without us populating the upstream key on tokens that don't have
+// the upstream extension installed.
+export const BUBBLES_META = "com.full-suite-en/bubbles/data";
+export const EXTERNAL_BUBBLES_META = "com.owlbear-rodeo-bubbles-extension/metadata";
 
 // Suite binding markers — bubbles only renders for tokens that the
 // suite has explicitly tagged as a bestiary monster or a character
@@ -106,6 +112,13 @@ const DIAMETER = 30;
 const BUBBLE_FONT_SIZE = DIAMETER - 8;          // 22, fits 1–2 digits
 const BUBBLE_FONT_SIZE_TIGHT = DIAMETER - 15;   // 15, used for 3 digits
 const TEXT_VERTICAL_OFFSET = -0.3;              // OBR text rendering nudge
+
+// OBR Image item's `text.style.fontSize` baseline at tokenScale = 1.0
+// (a 5-foot / 1-cell token). Auto-scale-text mode multiplies this by
+// tokenScale per token. 20 was picked over OBR's default 33 because
+// tokens with two-digit HP / AC bubbles overlap the upstream default
+// in cramped grids.
+const TOKEN_TEXT_FONT_BASE = 20;
 
 // Stat bubble palette. HP_FILL is a darker, more saturated red so
 // the bar stays legible at lower opacities and against varied map
@@ -152,7 +165,8 @@ interface BubbleData {
 }
 
 function readBubbleData(item: Item): BubbleData | null {
-  const m = (item.metadata as any)?.[BUBBLES_META];
+  const meta = (item.metadata as any) ?? {};
+  const m = meta[BUBBLES_META] ?? meta[EXTERNAL_BUBBLES_META];
   if (!m || typeof m !== "object") return null;
   const hpRaw = Number(m["health"]);
   const maxRaw = Number(m["max health"]);
@@ -230,14 +244,7 @@ function readVerticalOffset(): number {
 }
 
 function readPlayerThreshold(): number {
-  try {
-    const v = localStorage.getItem(LS_BUBBLES_PLAYER_THRESHOLD);
-    if (v != null && v !== "") {
-      const n = Number(v);
-      if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
-    }
-  } catch {}
-  return DEFAULT_PLAYER_THRESHOLD;
+  return cachedPlayerThreshold;
 }
 
 /** Quantise a 0..1 ratio to the nearest ceiling step of size T/100.
@@ -258,9 +265,26 @@ function quantiseRatio(ratio: number, thresholdPercent: number): number {
 // scene metadata on every tick. Refreshed on scene-ready and on
 // metadata-change events.
 let cachedCombatActive = false;
+let cachedPlayerThreshold = DEFAULT_PLAYER_THRESHOLD;
+let cachedAutoScaleText = false;
 function readCombatActive(meta: Record<string, unknown>): boolean {
   const c = meta[COMBAT_STATE_KEY] as { inCombat?: boolean; preparing?: boolean } | undefined;
   return !!(c?.inCombat || c?.preparing);
+}
+function readScenePlayerThreshold(meta: Record<string, unknown>): number {
+  const settings = meta[SCENE_BUBBLES_SETTINGS_KEY] as { playerThreshold?: unknown } | undefined;
+  const n = Number(settings?.playerThreshold);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : DEFAULT_PLAYER_THRESHOLD;
+}
+// Auto-scale-text: when ON, the HP-bar / AC / temp bubble font size
+// follows the token's renderedSize (in addition to the user's
+// per-client `bubbleScale`). When OFF, font size is fixed across
+// token sizes. Also gates whether the manual `verticalOffset` is
+// honored — auto-scale mode derives the offset from the font size.
+// DM-controlled, lives in scene metadata.
+function readSceneAutoScaleText(meta: Record<string, unknown>): boolean {
+  const settings = meta[SCENE_BUBBLES_SETTINGS_KEY] as { autoScaleText?: unknown } | undefined;
+  return !!settings?.autoScaleText;
 }
 
 type ViewMode = "full" | "hidden" | "silhouette";
@@ -288,15 +312,17 @@ function computeViewMode(
   ownsItem: boolean,
   isBestiaryBound: boolean,
 ): ViewMode {
-  if (isGM || ownsItem) return "full";
+  if (isGM) return "full";
   if (d.hide) return "hidden";
-  // Bestiary-bound monsters: when combat is preparing or active,
-  // ALWAYS show silhouette (HP bar progress visible, numbers + AC
-  // hidden) regardless of whether the DM has locked them. Out of
-  // combat they default to hidden so the canvas stays clean.
-  // This matches the "DM revealing combatants" affordance: combat
-  // starts → players SEE who's hurt without seeing exact HP.
-  if (isBestiaryBound) return inCombat ? "silhouette" : "hidden";
+  // Bestiary-bound monsters: respect lock state. Unlocked means full
+  // visibility (HP numbers + AC visible to all players). Locked means
+  // silhouette in combat (HP bar progress visible, numbers hidden).
+  // Out of combat, locked monsters are hidden.
+  if (isBestiaryBound) {
+    if (d.locked) return inCombat ? "silhouette" : "hidden";
+    return "full";
+  }
+  if (ownsItem) return "full";
   if (d.locked) return inCombat ? "silhouette" : "hidden";
   return "full";
 }
@@ -324,6 +350,53 @@ function getRenderedSize(image: Image, sceneDpi: number) {
     width: Math.abs(image.image.width * dpiRatio * image.scale.x),
     height: Math.abs(image.image.height * dpiRatio * image.scale.y),
   };
+}
+
+// Sync the OBR-native `text.style.fontSize` on every character / mount
+// image so the parent token's plainText label scales with `tokenScale`
+// when the DM enables auto-scale-text.
+//
+// **OFF-mode is a no-op** — once the toggle is off, this plugin must
+// not touch fontSize again. Otherwise the user can't manually set a
+// custom size in OBR's own token-edit panel without us overwriting
+// it on the next sync pass.
+// DM-only — writes propagate to every player automatically.
+async function syncTokenTextFontSize(
+  items: Item[],
+  sceneDpi: number,
+  autoScale: boolean,
+): Promise<void> {
+  if (!autoScale) return;
+  const targetIds: string[] = [];
+  const targetSize = new Map<string, number>();
+  for (const it of items) {
+    if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+    if (!isImage(it)) continue;
+    const text = (it as any).text as { style?: { fontSize?: number } } | undefined;
+    if (!text || !text.style) continue;
+    const cur = Number(text.style.fontSize ?? TOKEN_TEXT_FONT_BASE);
+    const size = getRenderedSize(it as Image, sceneDpi);
+    const tokenScale = Math.max(0.05, Math.min(size.width, size.height) / sceneDpi);
+    const want = Math.round(TOKEN_TEXT_FONT_BASE * tokenScale);
+    if (cur === want) continue;
+    targetIds.push(it.id);
+    targetSize.set(it.id, want);
+  }
+  if (!targetIds.length) return;
+  try {
+    await OBR.scene.items.updateItems(targetIds, (drafts) => {
+      for (const d of drafts) {
+        const want = targetSize.get(d.id);
+        if (want == null) continue;
+        const t = (d as any).text as { style?: { fontSize?: number } } | undefined;
+        if (t?.style && t.style.fontSize !== want) {
+          t.style.fontSize = want;
+        }
+      }
+    });
+  } catch (e) {
+    console.warn("[obr-suite/bubbles] syncTokenTextFontSize failed", e);
+  }
 }
 
 // Image dimensions and visible centre at NATIVE (image.scale = 1).
@@ -703,18 +776,18 @@ function computeLayoutFromMetrics(
   data: BubbleData,
   userScale: number,
   verticalOffset: number,
+  autoScaleText: boolean,
 ): BarLayout {
-  // Token-size-proportional scale. A standard 1-cell token (rendered
-  // width = sceneDpi worth of scene units) yields tokenScale = 1.0;
-  // a 0.5-cell familiar 0.5; a 3-cell ogre 3.0. Min(width, height)
-  // keeps very wide / tall token images from blowing up the bar past
-  // their narrower dimension.
+  // Token-size-proportional scale.
   const tokenScale = Math.max(0.05, Math.min(renderedWidth, renderedHeight) / sceneDpi);
   const s = tokenScale * userScale;
 
   const barHeight = BAR_HEIGHT * s;
   const barPadding = BAR_PADDING * s;
   const barCornerRadius = barHeight / 2;
+  // Bubble font size always tracks tokenScale × userScale — the
+  // `autoScaleText` flag controls the OBR-native plainText label on
+  // the parent token (handled by syncTokenTextFontSize below).
   const barFontSize = BAR_FONT_SIZE * s;
   const barTextOffset = TEXT_VERTICAL_OFFSET * s;
   const diameter = DIAMETER * s;
@@ -722,12 +795,14 @@ function computeLayoutFromMetrics(
   const bubbleFontSizeTight = BUBBLE_FONT_SIZE_TIGHT * s;
   const bubbleTextOffset = TEXT_VERTICAL_OFFSET * s;
 
-  // verticalOffset is in scene-coord pixels (negative = up). Applied to
-  // the bubble cluster's anchor so it shifts as a single unit instead
-  // of per-element. Default -20 lifts the whole row 20 px above the
-  // token's bottom edge so it doesn't visually fight with the OBR
-  // token name label that hangs just below.
-  const origin: Vector2 = { x: centerX, y: centerY + renderedHeight / 2 + verticalOffset };
+  // verticalOffset semantics:
+  //   autoScaleText OFF → use the user's manual `verticalOffset`.
+  //   autoScaleText ON  → lift the cluster by the auto-scaled OBR
+  //     plainText height so the bubbles stay above the token's name.
+  const effectiveVerticalOffset = autoScaleText
+    ? -Math.round(TOKEN_TEXT_FONT_BASE * tokenScale * 1.0)
+    : verticalOffset;
+  const origin: Vector2 = { x: centerX, y: centerY + renderedHeight / 2 + effectiveVerticalOffset };
 
   // Bar inset by `barPadding` on each side; sits 2*s scene units
   // above the bottom edge so there's a small gap to the token edge.
@@ -776,12 +851,13 @@ function computeLayout(
   data: BubbleData,
   userScale: number,
   verticalOffset: number,
+  autoScaleText: boolean,
 ): BarLayout {
   const center = getImageCenter(image, sceneDpi);
   const size = getRenderedSize(image, sceneDpi);
   return computeLayoutFromMetrics(
     center.x, center.y, size.width, size.height,
-    sceneDpi, data, userScale, verticalOffset,
+    sceneDpi, data, userScale, verticalOffset, autoScaleText,
   );
 }
 
@@ -1220,6 +1296,7 @@ async function syncBubbles(): Promise<void> {
 
     const userScale = readUserScale();
     const verticalOffset = readVerticalOffset();
+    const autoScaleText = cachedAutoScaleText;
     const playerThreshold = readPlayerThreshold();
     // Refresh the cached combat-active flag at sync time so a player
     // who joins during combat picks up the right view mode without
@@ -1229,6 +1306,13 @@ async function syncBubbles(): Promise<void> {
       cachedCombatActive = readCombatActive(meta);
     } catch {}
     const isGM = role === "GM";
+
+    // DM-only: keep every character/mount's OBR-native text.style.fontSize
+    // in sync with the auto-scale-text flag (no-op when fontSize already
+    // equals the target).
+    if (isGM) {
+      void syncTokenTextFontSize(allItems, sceneDpi, autoScaleText);
+    }
 
     const wanted = new Map<string, Wanted>();
     for (const it of allItems) {
@@ -1264,7 +1348,7 @@ async function syncBubbles(): Promise<void> {
       }
 
       const statsVisible = !d.hide;
-      const layout = computeLayout(it, sceneDpi, effectiveData, userScale, verticalOffset);
+      const layout = computeLayout(it, sceneDpi, effectiveData, userScale, verticalOffset, autoScaleText);
       // Silhouette suppresses AC and the temp bubble entry. The
       // geometryKey reflects what items will exist so a viewMode
       // flip drives a structure-rebuild instead of slipping
@@ -1531,8 +1615,7 @@ export async function setupBubbles(): Promise<void> {
     if (
       e.key === LS_BUBBLES_ENABLED ||
       e.key === LS_BUBBLES_SCALE ||
-      e.key === LS_BUBBLES_VERTICAL_OFFSET ||
-      e.key === LS_BUBBLES_PLAYER_THRESHOLD
+      e.key === LS_BUBBLES_VERTICAL_OFFSET
     ) {
       void clearAll().then(() => syncBubbles().catch(() => {}));
     }
@@ -1540,15 +1623,32 @@ export async function setupBubbles(): Promise<void> {
   window.addEventListener("storage", onStorage);
   unsubs.push(() => window.removeEventListener("storage", onStorage));
 
-  // Combat state changes (initiative tracker writes to the
-  // `com.initiative-tracker/combat` scene metadata key when prep /
-  // combat starts or ends). Locked tokens are gated on this for
-  // their player-side visibility, so we re-sync whenever it flips.
+  try {
+    const meta = await OBR.scene.getMetadata();
+    cachedPlayerThreshold = readScenePlayerThreshold(meta as Record<string, unknown>);
+    cachedAutoScaleText = readSceneAutoScaleText(meta as Record<string, unknown>);
+  } catch {}
+
+  // Combat state and synced bubble settings changes.
   unsubs.push(
     OBR.scene.onMetadataChange((meta) => {
       const next = readCombatActive(meta);
-      if (next !== cachedCombatActive) {
+      const nextThreshold = readScenePlayerThreshold(meta as Record<string, unknown>);
+      const nextAutoScale = readSceneAutoScaleText(meta as Record<string, unknown>);
+      if (
+        next !== cachedCombatActive ||
+        nextThreshold !== cachedPlayerThreshold ||
+        nextAutoScale !== cachedAutoScaleText
+      ) {
+        const autoScaleChanged = nextAutoScale !== cachedAutoScaleText;
         cachedCombatActive = next;
+        cachedPlayerThreshold = nextThreshold;
+        cachedAutoScaleText = nextAutoScale;
+        // Auto-scale toggling changes both font sizes AND the
+        // verticalOffset rule — tokens need a full layout rebuild.
+        if (autoScaleChanged) {
+          void clearAll();
+        }
         scheduleSync();
       }
     }),
@@ -1597,7 +1697,9 @@ export async function writeBubbleStats(
   try {
     await OBR.scene.items.updateItems([tokenId], (drafts) => {
       for (const d of drafts) {
-        const cur = ((d.metadata as any)[BUBBLES_META] as Record<string, unknown> | undefined) ?? {};
+        const cur = ((d.metadata as any)[BUBBLES_META] as Record<string, unknown> | undefined)
+          ?? ((d.metadata as any)[EXTERNAL_BUBBLES_META] as Record<string, unknown> | undefined)
+          ?? {};
         const next: Record<string, unknown> = { ...cur };
         if (patch.hp != null) next["health"] = Math.max(0, Math.floor(patch.hp));
         if (patch.maxHp != null) next["max health"] = Math.max(0, Math.floor(patch.maxHp));
@@ -1613,6 +1715,12 @@ export async function writeBubbleStats(
           next["health"] = Math.max(0, Math.min(cur2, mx));
         }
         (d.metadata as any)[BUBBLES_META] = next;
+        // Mirror to the upstream key only when it already exists, so we
+        // keep external "Stat Bubbles" extensions in sync without
+        // creating the legacy key on every token unprompted.
+        if ((d.metadata as any)[EXTERNAL_BUBBLES_META] != null) {
+          (d.metadata as any)[EXTERNAL_BUBBLES_META] = next;
+        }
         if (patch.name != null) (d.metadata as any)[BUBBLES_NAME] = patch.name;
       }
     });
@@ -1623,4 +1731,49 @@ export async function writeBubbleStats(
 
 export function readBubbleStatsForToken(item: Item): BubbleData | null {
   return readBubbleData(item);
+}
+
+// One-shot DM repair: clears the legacy `hide:true` flag on every bubble
+// metadata blob in the current scene. Pre-migration scenes can carry the
+// flag forward and `hide=true` makes computeViewMode return "hidden" for
+// non-GMs unconditionally — players stop seeing the bar entirely. After
+// the repair, visibility falls back to the `locked` field: unlocked →
+// full bar; locked + in-combat → silhouette; locked + out-of-combat →
+// hidden.
+export async function repairLegacyHiddenBubbles(): Promise<{ touched: number; total: number }> {
+  let items: Item[] = [];
+  try {
+    items = await OBR.scene.items.getItems();
+  } catch (e) {
+    console.warn("[obr-suite/bubbles] repair: getItems failed", e);
+    return { touched: 0, total: 0 };
+  }
+  const targetIds: string[] = [];
+  for (const it of items) {
+    const meta = (it.metadata as any) ?? {};
+    const a = meta[BUBBLES_META];
+    const b = meta[EXTERNAL_BUBBLES_META];
+    const aHide = a && typeof a === "object" && (a as any).hide === true;
+    const bHide = b && typeof b === "object" && (b as any).hide === true;
+    if (aHide || bHide) targetIds.push(it.id);
+  }
+  if (targetIds.length === 0) return { touched: 0, total: items.length };
+  try {
+    await OBR.scene.items.updateItems(targetIds, (drafts) => {
+      for (const d of drafts) {
+        const meta = d.metadata as any;
+        const a = meta[BUBBLES_META];
+        if (a && typeof a === "object" && (a as any).hide === true) {
+          (a as any).hide = false;
+        }
+        const b = meta[EXTERNAL_BUBBLES_META];
+        if (b && typeof b === "object" && (b as any).hide === true) {
+          (b as any).hide = false;
+        }
+      }
+    });
+  } catch (e) {
+    console.warn("[obr-suite/bubbles] repair: updateItems failed", e);
+  }
+  return { touched: targetIds.length, total: items.length };
 }

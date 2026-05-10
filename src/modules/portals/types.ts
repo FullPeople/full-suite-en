@@ -16,6 +16,10 @@ export interface PortalMeta {
   // popover writes through immediately so re-opening the dialog
   // shows the persisted state.
   showName?: boolean;
+  // Persisted visibility state for the portal.
+  visible?: boolean;
+  // Persisted lock state for the portal.
+  locked?: boolean;
 }
 
 export interface Presets {

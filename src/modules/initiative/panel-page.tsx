@@ -21,6 +21,7 @@ import {
 import { subscribeToSfx } from "../dice/sfx-broadcast";
 import { bindPanelDrag } from "../../utils/panelDrag";
 import { PANEL_IDS } from "../../utils/panelLayout";
+import { installDebugOverlay } from "../../utils/debugOverlay";
 import "./styles/initiative.css";
 
 // Suite-namespaced popover ID so the standalone plugin (same logical UI)
@@ -54,10 +55,17 @@ const HEIGHT_COMBAT = 159;
 // Backwards-compat default — the unused historical "154" baseline,
 // kept for the initial popover open before combatState is available.
 const EXPANDED_HEIGHT = HEIGHT_IDLE;
+const BUBBLES_SETTINGS_KEY = "com.full-suite-en/bubbles/settings";
+const DEFAULT_PLAYER_THRESHOLD = 25;
 function heightFor(state: { inCombat: boolean; preparing: boolean }): number {
   if (state.inCombat) return HEIGHT_COMBAT;
   if (state.preparing) return HEIGHT_PREPARING;
   return HEIGHT_IDLE;
+}
+function readPlayerThresholdFromMeta(meta: Record<string, unknown>): number {
+  const settings = meta[BUBBLES_SETTINGS_KEY] as { playerThreshold?: unknown } | undefined;
+  const n = Number(settings?.playerThreshold);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : DEFAULT_PLAYER_THRESHOLD;
 }
 
 export const LangContext = createContext<Lang>("zh");
@@ -109,26 +117,23 @@ function App() {
     OBR.player.getId().then((id) => { myIdRef.current = id; }).catch(() => {});
   }, []);
 
-  // Per-client phase threshold for locked tokens shown to non-owners
+  // Scene-synced phase threshold for locked tokens shown to non-owners
   // during combat (mirrors the bubbles silhouette quantisation key).
-  // Read once on mount + refresh on `storage` events so flipping the
-  // setting in another tab is picked up.
-  const PLAYER_THRESHOLD_KEY = "com.full-suite-en/bubbles/player-threshold";
-  const [playerThreshold, setPlayerThreshold] = useState<number>(() => {
-    try {
-      const v = localStorage.getItem(PLAYER_THRESHOLD_KEY);
-      const n = v == null ? 25 : Number(v);
-      return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 25;
-    } catch { return 25; }
-  });
+  const [playerThreshold, setPlayerThreshold] = useState<number>(DEFAULT_PLAYER_THRESHOLD);
   useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== PLAYER_THRESHOLD_KEY) return;
-      const n = e.newValue == null ? 25 : Number(e.newValue);
-      setPlayerThreshold(Number.isFinite(n) && n >= 0 && n <= 100 ? n : 25);
+    let alive = true;
+    OBR.scene.getMetadata()
+      .then((meta) => {
+        if (alive) setPlayerThreshold(readPlayerThresholdFromMeta(meta as Record<string, unknown>));
+      })
+      .catch(() => {});
+    const unsub = OBR.scene.onMetadataChange((meta) => {
+      setPlayerThreshold(readPlayerThresholdFromMeta(meta as Record<string, unknown>));
+    });
+    return () => {
+      alive = false;
+      unsub();
     };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   const resolveHpRatio = useCallback((item: InitiativeItem): number | null => {
@@ -685,6 +690,7 @@ function PluginGate() {
 
   useEffect(() => {
     OBR.onReady(() => {
+      installDebugOverlay();
       subscribeToSfx();
       setReady(true);
       OBR.scene.isReady().then(setSceneReady);

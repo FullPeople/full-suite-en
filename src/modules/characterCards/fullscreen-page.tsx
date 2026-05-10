@@ -1,8 +1,25 @@
 import { render } from "preact";
 import { useEffect, useState, useMemo, useCallback } from "preact/hooks";
+import OBR from "@owlbear-rodeo/sdk";
 import { fireQuickRoll } from "../dice/tags";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
 import { getLocalLang } from "../../state";
+
+// Click a spell / feature / feat name → fire BC_SEARCH_QUERY so the
+// global-search popover opens with that name pre-filled and auto-pins
+// the first hit. LOCAL only — sending REMOTE causes every receiving
+// client to also open their own search.
+function fireNameSearch(q: string): void {
+  const trimmed = (q || "").trim();
+  if (!trimmed) return;
+  try {
+    OBR.broadcast.sendMessage(
+      "com.full-suite-en/search-query",
+      { q: trimmed, autoPin: true },
+      { destination: "LOCAL" },
+    );
+  } catch {}
+}
 
 // Per-client UI language. The character-card iframe re-reads this on
 // load (changing language requires reopening the panel for now —
@@ -44,6 +61,11 @@ function tt(zhText: string, enText: string): string {
 // third-party widget.
 
 const SERVER_ORIGIN = "https://obr.dnd.center";
+
+// Broadcast id mirrored from panel-page.ts. Sent whenever any client
+// imports / refreshes a card's data.json so other clients viewing the
+// same cardId can re-fetch and stay in sync.
+const BC_CARD_UPDATED = "com.full-suite-en/cc-card-updated";
 
 // ===== Types ================================================
 interface CharacterData {
@@ -278,7 +300,7 @@ function StatsBanner({
 
 function rollExpr(label: string, expr: string, advMode?: "adv" | "dis") {
   if (!expr) return;
-  fireQuickRoll({ expression: expr, label, advMode }).catch(() => {});
+  fireQuickRoll({ expression: expr, label, advMode });
 }
 
 function AbilitiesAndSkills({ data }: { data: CharacterData }) {
@@ -535,11 +557,15 @@ function SpellsSection({ data }: { data: CharacterData }) {
       <>
         <div class="spell"
           onClick={() => setOpenSpell(isOpen ? null : key)}
-          title={tt("点击展开法术详情", "Click to expand spell details")}>
+          title={tt("点击展开法术详情 · 点击名字直接搜索", "Click to expand · Click the name to search")}>
           <span class={`spell-lv ${(s.level ?? 0) === 0 ? "cantrip" : ""}`}>
             {(s.level ?? 0) === 0 ? tt("戏", "C") : tt(`${s.level}环`, `Lv${s.level}`)}
           </span>
-          <span class="spell-name">{s.name}</span>
+          <span
+            class="spell-name srch-name"
+            title={tt(`搜索 ${s.name}`, `Search ${s.name}`)}
+            onClick={(e: MouseEvent) => { e.stopPropagation(); fireNameSearch(s.name); }}
+          >{s.name}</span>
           {s.meta?.concentration && <span class="spell-tag conc">{tt("专注", "Conc")}</span>}
           {s.meta?.ritual && <span class="spell-tag ritual">{tt("仪式", "Ritual")}</span>}
         </div>
@@ -643,9 +669,17 @@ function FeatureBlock({ title, items }: { title: string; items: any[] }) {
         const isOpen = openIdx === i;
         return (
           <div class={`feat ${isOpen ? "is-open" : ""}`}>
-            <div class="feat-h" onClick={() => setOpenIdx(isOpen ? null : i)}>
+            <div
+              class="feat-h"
+              onClick={() => setOpenIdx(isOpen ? null : i)}
+              title={tt("点击展开 · 点击名字直接搜索", "Click to expand · Click the name to search")}
+            >
               <span class="feat-name">
-                {f.name}
+                <span
+                  class="srch-name"
+                  title={tt(`搜索 ${f.name}`, `Search ${f.name}`)}
+                  onClick={(e: MouseEvent) => { e.stopPropagation(); fireNameSearch(f.name); }}
+                >{f.name}</span>
                 {f.level != null && <span class="lv">Lv{f.level}</span>}
                 {f.category && <span class="lv" style={{ borderColor: "var(--teal-soft)", color: "var(--teal)" }}>{f.category}</span>}
               </span>
@@ -850,6 +884,21 @@ function App() {
 
   useEffect(() => { void loadData(); }, [loadData]);
 
+  // Multi-client sync — when another client imports / refreshes this
+  // same card, BC_CARD_UPDATED arrives on REMOTE; we re-fetch so the
+  // open fullscreen panel reflects the change live. Skipped in
+  // example mode (the bundled reference card never receives upstream
+  // edits).
+  useEffect(() => {
+    if (!cardId || exampleMode) return;
+    const unsub = OBR.broadcast.onMessage(BC_CARD_UPDATED, (event) => {
+      const payload = event.data as { cardId?: string } | undefined;
+      if (payload?.cardId !== cardId) return;
+      void loadData();
+    });
+    return unsub;
+  }, [cardId, loadData, exampleMode]);
+
   // Patch handler — for now updates local state only. Future: PUT to
   // server when /api/character/<room>/<card>/data endpoint exists.
   // In example-mode it's a no-op so the reference card can't be
@@ -904,12 +953,22 @@ function App() {
             return;
           }
           const result = await res.json();
+          // Broadcast so any other open fullscreen / info panel for
+          // this same card auto-refreshes — no need for them to click
+          // the refresh button.
+          try {
+            OBR.broadcast.sendMessage(
+              BC_CARD_UPDATED,
+              { cardId, url: `${SERVER_ORIGIN}/characters/${encodeURIComponent(roomId)}/${encodeURIComponent(cardId)}/` },
+              { destination: "REMOTE" },
+            );
+          } catch {}
           if (result.render_warning) {
             window.alert(
               `已保存到服务器，但旧版静态 HTML 渲染失败：${result.render_warning}\n（不影响新全屏面板查看）`,
             );
           } else {
-            window.alert(`✓ 已保存为 ${result.name}\n其他客户端刷新后可看到。`);
+            window.alert(`✓ 已保存为 ${result.name}\n其他客户端将自动刷新。`);
           }
         } catch (e: any) {
           window.alert(

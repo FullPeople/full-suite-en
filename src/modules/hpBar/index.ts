@@ -35,10 +35,12 @@ export const HP_BAR_FLAG_KEY = `${PLUGIN_ID}/enabled`;
 const BESTIARY_SLUG_KEY = "com.bestiary/slug";
 const CC_BIND_KEY = "com.character-cards/boundCardId";
 
-// Bubbles plugin's metadata key. The HP bar component is now tied
-// to this — selecting any token that already has bubbles + no
-// other binding auto-enables the HP bar component on the fly.
-const BUBBLES_META_KEY = "com.owlbear-rodeo-bubbles-extension/metadata";
+// Suite-owned bubbles namespace + upstream fallback. The HP bar
+// component is tied to either — selecting any token that already
+// has bubbles in either key (and no other suite binding) auto-
+// enables the HP bar component on the fly.
+const BUBBLES_META_KEY = "com.full-suite-en/bubbles/data";
+const EXTERNAL_BUBBLES_META_KEY = "com.owlbear-rodeo-bubbles-extension/metadata";
 
 const CTX_ADD = "com.full-suite-en/hp-bar-add";
 const CTX_REMOVE = "com.full-suite-en/hp-bar-remove";
@@ -51,6 +53,8 @@ const TOP_OFFSET = 100;
 const unsubs: Array<() => void> = [];
 let popoverOpen = false;
 let currentItemId: string | null = null;
+let hpBarIsGM = false;
+let hpBarPlayerId = "";
 
 async function popoverAnchor(): Promise<{ left: number; top: number }> {
   let vw = 1280, vh = 720;
@@ -100,13 +104,22 @@ async function closePopover(): Promise<void> {
 }
 
 function hasBubblesMetadata(item: any): boolean {
-  const m = (item?.metadata || {})[BUBBLES_META_KEY];
+  const meta = item?.metadata || {};
+  const m = meta[BUBBLES_META_KEY] ?? meta[EXTERNAL_BUBBLES_META_KEY];
   if (!m || typeof m !== "object") return false;
   const r = m as Record<string, unknown>;
   return r["health"] != null
     || r["max health"] != null
     || r["temporary health"] != null
     || r["armor class"] != null;
+}
+
+function isBubblesLocked(item: any): boolean {
+  const meta = item?.metadata || {};
+  const m = meta[BUBBLES_META_KEY] ?? meta[EXTERNAL_BUBBLES_META_KEY];
+  if (!m || typeof m !== "object") return true;
+  const raw = (m as Record<string, unknown>)["locked"];
+  return raw === undefined ? true : !!raw;
 }
 
 async function handleSelection(selection: string[] | undefined): Promise<void> {
@@ -129,6 +142,11 @@ async function handleSelection(selection: string[] | undefined): Promise<void> {
     return;
   }
   const meta = (item.metadata || {}) as Record<string, unknown>;
+  const ownsItem = !!hpBarPlayerId && (item as any).createdUserId === hpBarPlayerId;
+  if (isBubblesLocked(item) && !hpBarIsGM && !ownsItem) {
+    if (popoverOpen) await closePopover();
+    return;
+  }
   // Defer to bestiary / character-card popovers ONLY when their
   // own auto-popup is enabled. When the user has disabled either
   // auto-popup the standalone HP bar takes over so the user still
@@ -175,6 +193,8 @@ function isCcAutoPopupOn(): boolean {
 }
 
 export async function setupHpBar(): Promise<void> {
+  try { hpBarIsGM = (await OBR.player.getRole()) === "GM"; } catch {}
+  try { hpBarPlayerId = await OBR.player.getId(); } catch {}
   registerPanelBbox(PANEL_IDS.hpBar, async () => {
     if (!popoverOpen) return null;
     const { left, top } = await popoverAnchor();
@@ -267,6 +287,8 @@ export async function setupHpBar(): Promise<void> {
 
   unsubs.push(
     OBR.player.onChange(async (player) => {
+      hpBarIsGM = player.role === "GM";
+      hpBarPlayerId = player.id || hpBarPlayerId;
       try { await handleSelection(player.selection); } catch {}
     }),
   );

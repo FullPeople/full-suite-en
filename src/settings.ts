@@ -19,6 +19,8 @@ import { applyLangAttr } from "./i18n";
 import { ICONS } from "./icons";
 import { assetUrl } from "./asset-base";
 import { STABLE_HIDES } from "./feature-flags";
+import bundledSupportersZh from "../public/supporters.zh.json";
+import bundledSupportersEn from "../public/supporters.en.json";
 import {
   importLocalJson,
   importLocalMd,
@@ -27,6 +29,7 @@ import {
   BC_LOCAL_CONTENT_CHANGED,
   type LocalFileMeta,
 } from "./utils/localContent";
+import { repairLegacyHiddenBubbles } from "./modules/bubbles";
 
 // Merged Settings + About panel.
 //
@@ -51,9 +54,10 @@ import {
 
 const POPOVER_ID = "com.full-suite-en/settings";
 const KOFI_URL = "https://ko-fi.com/fullpeople";
-const AFDIAN_URL = "https://ifdian.net/a/fullpeople";
 const EMAIL = "1763086701@qq.com";
 const GITHUB_URL = "https://github.com/FullPeople";
+const BUBBLES_SETTINGS_KEY = "com.full-suite-en/bubbles/settings";
+const DEFAULT_BUBBLES_PLAYER_THRESHOLD = 25;
 
 interface BilingualHtml { zh: string; en: string; }
 interface TabDef {
@@ -72,42 +76,38 @@ interface TabDef {
 
 let activeTab = "support";
 let isGM = false;
+let bubblePlayerThreshold = DEFAULT_BUBBLES_PLAYER_THRESHOLD;
+let bubbleAutoScaleText = false;
 
-// Backers credited in the support tab. EN variant carries TWO lists
-// — ZH (the existing supporter community on Afdian / WeChat / Alipay)
-// and EN (initially empty; will be filled as English-speaking
-// supporters appear via Ko-fi etc.).
+interface Supporter {
+  name: string;
+  amount: number;
+}
+
+let sharedSupportersZh: Supporter[] = normalizeSupporterArray(bundledSupportersZh);
+let sharedSupportersEn: Supporter[] = normalizeSupporterArray(bundledSupportersEn);
+
+// Single-source-of-truth for the supporter lists is `shared/supporters.zh.json`
+// and `shared/supporters.en.json`. Each deploy script does
+//   `cp ../shared/supporters.zh.json public/supporters.zh.json`
+// before `vite build`, so editing only `shared/...` is enough — public/ gets
+// refreshed at deploy time. For local `npm run dev`, also keep
+// `obr-suite-en/public/supporters.{zh,en}.json` in sync so the dev preview
+// shows the same list.
 //
-// The supporters block in the UI shows EN by default with a small
-// inline tab toggle to switch to ZH. When EN is selected and empty,
-// the entire backers grid collapses to a one-line "no supporters
-// yet" placeholder so the section doesn't take vertical real estate
-// out of the gate.
-const SUPPORTERS: { zh: string[]; en: string[] } = {
-  zh: [
-    "fu读机", "折云", "咸鱼", "呸呸", "Ejectam719",
-    "皓天", "莫西斯", "艾迪", "诺雁",
-    "愛睡眠（好崩溃睡不着ver）", "这只冒险小队没有人类了",
-    "奶牛饭", "DK", "黄烟", "盲人过北极", "1234",
-    "浩然正气","青灯栖凰","深白色(●—●)","白辰","瀞聆","滑而不稽则罔","Aisle","PB27",
-    "蚀星ErosionStar","消炎药","SiriusTGT","悠悠向青山","小舟","孤月映寒","Joe","武御",
-    "Misaka Mikoto","森海飞霞🐿","每日 1/? Fen²","北省","得君所见","蜗","鱼喵",
-    "52Hertz","咩","饭盒是阿玛利斯靴子","白烏鴉","不周","喵呜嗷","咖啡","FyingFuji",
-    "过路的蔚星","cc","豹式装甲启动","浮生若梦，为欢几何","守矢豆","星锑的TV","蠕行的漆黑","姜川安.",
-    "机智大狐",
-  ],
-  en: [
-    // Empty initially — fills as English-speaking supporters arrive.
-  ],
-};
+// No hardcoded fallback: a stale fallback array silently shadowing the JSON
+// has bitten us before (see git history around 2026-05-08). An empty list
+// rendering as "no backers" is the correct behaviour if the JSON is empty.
 
 function supportersHtml(lang: Language): string {
   // Pure-CSS tab switcher via radio + sibling-selector. No JS needed —
   // the radio holds the active-tab state. EN is checked by default.
-  const enCount = SUPPORTERS.en.length;
-  const zhCount = SUPPORTERS.zh.length;
-  const enList = SUPPORTERS.en.map((n) => `<span class="backer">${n}</span>`).join("");
-  const zhList = SUPPORTERS.zh.map((n) => `<span class="backer">${n}</span>`).join("");
+  const enItems = sharedSupportersEn;
+  const zhItems = sharedSupportersZh;
+  const enCount = enItems.length;
+  const zhCount = zhItems.length;
+  const enList = renderSupporterChips(enItems);
+  const zhList = renderSupporterChips(zhItems);
 
   const heading = lang === "zh" ? `${ICONS.heart} 鸣谢` : `${ICONS.heart} Thanks`;
   const intro = lang === "zh"
@@ -152,12 +152,120 @@ function supportersHtml(lang: Language): string {
     </div>`;
 }
 
+function renderSupporterChips(items: Supporter[]): string {
+  return items.map((s) => {
+    const amount = Number.isInteger(s.amount) ? String(s.amount) : String(s.amount);
+    const size = supporterFontSize(s.amount);
+    return `<span class="backer ${supporterTier(s.amount)}" data-amount="${escapeAttr(amount)}" style="font-size:${size}px">${escapeAttr(s.name)}</span>`;
+  }).join("");
+}
+
+function supporterTier(amount: number): string {
+  if (amount >= 100) return "tier5";
+  if (amount >= 50) return "tier4";
+  if (amount >= 30) return "tier3";
+  if (amount >= 20) return "tier2";
+  return "tier1";
+}
+
+function supporterFontSize(amount: number): number {
+  // Continuous sqrt scaling so every donation amount renders at a
+  // slightly different size. The previous 4-tier staircase bucketed
+  // obviously different contributions into the same visual weight
+  // (¥20 and ¥25 looked identical). sqrt diminishes returns at the
+  // top so a ¥150 doesn't dwarf a ¥100. Clamped to [9.5, 24].
+  // Sample: ¥5 → 10.5 / ¥20 → 13.9 / ¥25 → 14.8 / ¥50 → 18.0 /
+  // ¥100 → 22.5. Tier classes (font-weight / halo) still come from
+  // supporterTier — bold + glow expresses big donors orthogonally.
+  const raw = 7 + 1.55 * Math.sqrt(Math.max(0, amount));
+  const clamped = Math.max(9.5, Math.min(24, raw));
+  return Math.round(clamped * 10) / 10;
+}
+
+function normalizeSupporter(v: unknown): Supporter | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as { name?: unknown; amount?: unknown };
+  const name = typeof o.name === "string" ? o.name.trim() : "";
+  if (!name) return null;
+  const raw = typeof o.amount === "number" ? o.amount : Number(o.amount);
+  return { name, amount: Number.isFinite(raw) ? raw : 10 };
+}
+
+function normalizeSupporterArray(v: unknown): Supporter[] {
+  return Array.isArray(v)
+    ? v.map(normalizeSupporter).filter((item): item is Supporter => !!item)
+    : [];
+}
+
+async function loadSupporterFile(path: string): Promise<Supporter[]> {
+  const res = await fetch(assetUrl(path), { cache: "no-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  return Array.isArray(json)
+    ? json.map(normalizeSupporter).filter((v): v is Supporter => !!v)
+    : [];
+}
+
+async function loadSupporters(): Promise<void> {
+  try {
+    const next = await loadSupporterFile("supporters.zh.json");
+    if (next.length > 0) sharedSupportersZh = next;
+  } catch (e) { console.warn("[full-suite-en/settings] supporters.zh.json refresh failed", e); }
+  try {
+    sharedSupportersEn = await loadSupporterFile("supporters.en.json");
+  } catch (e) { console.warn("[full-suite-en/settings] supporters.en.json refresh failed", e); }
+}
+
+function readBubbleThresholdFromMeta(meta: Record<string, unknown>): number {
+  const settings = meta[BUBBLES_SETTINGS_KEY] as { playerThreshold?: unknown } | undefined;
+  const n = Number(settings?.playerThreshold);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : DEFAULT_BUBBLES_PLAYER_THRESHOLD;
+}
+
+function readBubbleAutoScaleFromMeta(meta: Record<string, unknown>): boolean {
+  const settings = meta[BUBBLES_SETTINGS_KEY] as { autoScaleText?: unknown } | undefined;
+  return !!settings?.autoScaleText;
+}
+
+async function refreshBubbleSettings(): Promise<void> {
+  try {
+    const meta = await OBR.scene.getMetadata();
+    bubblePlayerThreshold = readBubbleThresholdFromMeta(meta as Record<string, unknown>);
+    bubbleAutoScaleText = readBubbleAutoScaleFromMeta(meta as Record<string, unknown>);
+  } catch {
+    bubblePlayerThreshold = DEFAULT_BUBBLES_PLAYER_THRESHOLD;
+    bubbleAutoScaleText = false;
+  }
+}
+
+// Merge-write helpers — OBR.scene.setMetadata replaces the whole
+// settings object, so we always write both fields together.
+async function setBubblePlayerThreshold(value: number): Promise<void> {
+  const clamped = Math.max(0, Math.min(100, Math.round(value)));
+  bubblePlayerThreshold = clamped;
+  await OBR.scene.setMetadata({
+    [BUBBLES_SETTINGS_KEY]: {
+      playerThreshold: clamped,
+      autoScaleText: bubbleAutoScaleText,
+    },
+  });
+}
+
+async function setBubbleAutoScaleText(value: boolean): Promise<void> {
+  bubbleAutoScaleText = !!value;
+  await OBR.scene.setMetadata({
+    [BUBBLES_SETTINGS_KEY]: {
+      playerThreshold: bubblePlayerThreshold,
+      autoScaleText: bubbleAutoScaleText,
+    },
+  });
+}
+
 const SUPPORT: BilingualHtml = {
   zh: `
     <p>这套插件由 <b>弗人 FullPeople</b> 利用业余时间维护，所有代码开源于 GitHub。如果它对你的跑团有帮助，欢迎以下方式支持作者：</p>
     <div class="support-row">
       <a class="support-btn kofi" href="${KOFI_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.coffee}</span> Support on Ko-fi</a>
-      <a class="support-btn afdian" href="${AFDIAN_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.heart}</span> 前往爱发电</a>
       <span class="qr-pair" title="微信 / 支付宝">
         <img class="qr-thumb" src="${assetUrl("wx.png")}" alt="微信" loading="lazy">
         <img class="qr-thumb" src="${assetUrl("zfb.jpg")}" alt="支付宝" loading="lazy">
@@ -179,7 +287,6 @@ const SUPPORT: BilingualHtml = {
     <p>This plugin suite is built and maintained by <b>弗人 FullPeople</b> in spare time, with all code open-sourced on GitHub. If you find it useful for your campaigns, here are ways to support the author:</p>
     <div class="support-row">
       <a class="support-btn kofi" href="${KOFI_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.coffee}</span> Support on Ko-fi</a>
-      <a class="support-btn afdian" href="${AFDIAN_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.heart}</span> Afdian (Chinese Patreon)</a>
       <span class="qr-pair" title="WeChat / Alipay (CN)">
         <img class="qr-thumb" src="${assetUrl("wx.png")}" alt="WeChat Pay" loading="lazy">
         <img class="qr-thumb" src="${assetUrl("zfb.jpg")}" alt="Alipay" loading="lazy">
@@ -1368,6 +1475,17 @@ const TABS: TabDef[] = [
             </div>
             <button class="tog" data-key="debugOverlay" type="button" aria-pressed="false"></button>
           </div>
+          <div class="row">
+            <div class="lbl">
+              ${lang === "zh" ? "性能监视器（FPS / 绘制数）" : "Perf monitor (FPS / drawcall)"}
+              <div class="desc"><em>${
+                lang === "zh"
+                  ? "在屏幕左上角显示一个小窗口，实时显示 <b>FPS</b> 和 <b>绘制数</b>（场景里 item 总数 — OBR 没有真实 drawcall API，这是近似值）。<b>仅本地</b>，可拖拽。"
+                  : "Shows a tiny top-left window with live <b>FPS</b> and <b>drawcall</b> (= scene item count; OBR exposes no true drawcall counter, so this is an approximation). <b>Local only</b>, draggable."
+              }</em></div>
+            </div>
+            <button class="tog" data-key="perfWindow" type="button" aria-pressed="false"></button>
+          </div>
         </div>
       `;
       // Sound-effect toggle moved out of 基础设置 — each module
@@ -1379,6 +1497,25 @@ const TABS: TabDef[] = [
     afterRender: (root) => {
       // Reflect current debug-overlay state on the toggle's pressed
       // attribute + .on class so the UI matches LS at first paint.
+      // Perf-window toggle (per-client). Reads / writes the same LS
+      // key the perfWindow module reads on setup.
+      const perfBtn = root.querySelector<HTMLButtonElement>('.tog[data-key="perfWindow"]');
+      if (perfBtn) {
+        const isOn = (() => {
+          try { return localStorage.getItem("full-suite-en/perf-window/visible") === "1"; }
+          catch { return false; }
+        })();
+        perfBtn.classList.toggle("on", isOn);
+        perfBtn.setAttribute("aria-pressed", String(isOn));
+        perfBtn.addEventListener("click", async () => {
+          const cur = perfBtn.classList.contains("on");
+          const next = !cur;
+          perfBtn.classList.toggle("on", next);
+          perfBtn.setAttribute("aria-pressed", String(next));
+          const m = await import("./modules/perfWindow");
+          m.setPerfWindowVisible(next);
+        });
+      }
       const debugBtn = root.querySelector<HTMLButtonElement>('.tog[data-key="debugOverlay"]');
       if (debugBtn) {
         const isOn = (() => {
@@ -1733,14 +1870,7 @@ const TABS: TabDef[] = [
       // in modules/bubbles/index.ts. 0..100. Locked tokens shown to
       // players quantise their HP ratio to multiples of this percent.
       const threshold = (() => {
-        try {
-          const v = localStorage.getItem("com.full-suite-en/bubbles/player-threshold");
-          if (v != null && v !== "") {
-            const n = Number(v);
-            if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
-          }
-        } catch {}
-        return 25;
+        return bubblePlayerThreshold;
       })();
       // Per-client bubble scale — multiplier applied to BAR_HEIGHT /
       // DIAMETER / font size in modules/bubbles/index.ts. 0.5..2.0
@@ -1786,6 +1916,10 @@ const TABS: TabDef[] = [
       const sizeDesc = lang === "zh"
         ? "本机偏好。乘到 HP 条 / AC 盾 / 字号上的统一缩放。0.5 紧凑，2.0 放大。默认 1.0。"
         : "Per-client preference. Multiplier applied to the HP bar / AC shield / font size. 0.5 = compact, 2.0 = chunky. Default 1.0.";
+      const autoScaleLbl = lang === "zh" ? "字号随 token 自动缩放" : "Auto-scale text with token";
+      const autoScaleDesc = lang === "zh"
+        ? "DM 全局开关。开启后：字号会跟着 token 大小缩放，气泡的<b>上下偏移自动算</b>，不再使用上面的手动偏移设置（手动框会变灰）。关闭时：字号在所有 token 上保持一致，由你的「上下偏移」决定气泡距离 token 的距离。"
+        : "DM-wide toggle. ON: font scales with token size, and the cluster's vertical offset is auto-derived from the font (the manual offset input greys out). OFF: font is constant across token sizes; the manual vertical offset above controls how far the cluster sits from the token.";
       return `
         <h3>${lang === "zh" ? "选项" : "Options"}</h3>
         <div class="row">
@@ -1805,8 +1939,20 @@ const TABS: TabDef[] = [
           </div>
           <input type="number" step="1" value="${offset}"
                  data-key="bubblesVerticalOffset"
-                 style="flex:0 0 80px;align-self:center;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);border-radius:4px;padding:3px 6px;color:#fff;font:inherit;text-align:right"/>
+                 ${bubbleAutoScaleText ? "disabled" : ""}
+                 style="flex:0 0 80px;align-self:center;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);border-radius:4px;padding:3px 6px;color:#fff;font:inherit;text-align:right${bubbleAutoScaleText ? ";opacity:0.45" : ""}"/>
           <span style="flex:0 0 28px;text-align:right;color:#9aa0b3;font-size:11px">px</span>
+        </div>
+        <div class="row">
+          <div class="lbl">
+            ${autoScaleLbl}
+            <div class="desc"><em>${autoScaleDesc}</em></div>
+          </div>
+          <button type="button"
+                  class="tog ${bubbleAutoScaleText ? "on" : ""}"
+                  data-key="bubblesAutoScaleText"
+                  ${isGM ? "" : "disabled"}
+                  aria-pressed="${bubbleAutoScaleText ? "true" : "false"}"></button>
         </div>
         <div class="row">
           <div class="lbl">
@@ -1815,9 +1961,24 @@ const TABS: TabDef[] = [
           </div>
           <input type="number" min="0" max="100" step="5" value="${threshold}"
                  data-key="bubblesPlayerThreshold"
+                 ${isGM ? "" : "disabled"}
                  style="flex:0 0 80px;align-self:center;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);border-radius:4px;padding:3px 6px;color:#fff;font:inherit;text-align:right"/>
           <span style="flex:0 0 28px;text-align:right;color:#9aa0b3;font-size:11px">%</span>
         </div>
+        ${isGM ? `
+        <h3 style="margin-top:14px">${lang === "zh" ? "维护" : "Maintenance"}</h3>
+        <div class="row">
+          <div class="lbl">
+            ${lang === "zh" ? "修复历史血条" : "Repair legacy hidden bars"}
+            <div class="desc"><em>${lang === "zh"
+              ? `因为<b>血量元数据迁移</b>，旧场景里很多 token 仍然带着 <code>hide=true</code>，导致玩家完全看不到血条。点击后会清除当前场景<b>所有 token</b> 的 hide 标志。修复后：<b>未上锁</b>的 token 血条对玩家常态可见；<b>上锁</b>的 token 仅在<b>战斗中</b>显示无数值剪影、非战斗状态隐藏。每个场景需要单独点一次。`
+              : `Pre-migration scenes can still carry a <code>hide=true</code> flag on bubble metadata, hiding the bar from players entirely. Clicking will clear the flag from <b>every token</b> in the current scene. After repair: <b>unlocked</b> tokens show their bar to all players full-time; <b>locked</b> tokens show a numberless silhouette during <b>combat</b> only and stay hidden out-of-combat. Run this once per scene.`}</em></div>
+          </div>
+          <button data-key="bubblesRepairLegacyHide" class="reset-panels-btn" type="button">${
+            lang === "zh" ? "修复当前场景" : "Repair current scene"
+          }</button>
+        </div>
+        ` : ""}
         ${desc}
       `;
     },
@@ -1853,17 +2014,18 @@ const TABS: TabDef[] = [
       const thrInput = root.querySelector<HTMLInputElement>('input[data-key="bubblesPlayerThreshold"]');
       if (thrInput) {
         const commit = () => {
+          if (!isGM) return;
           const raw = thrInput.value.trim();
           if (raw === "") {
             thrInput.value = "25";
-            try { localStorage.setItem("com.full-suite-en/bubbles/player-threshold", "25"); } catch {}
+            void setBubblePlayerThreshold(25);
             return;
           }
           const n = Number(raw);
           if (!Number.isFinite(n)) return;
           const clamped = Math.max(0, Math.min(100, Math.round(n)));
           thrInput.value = String(clamped);
-          try { localStorage.setItem("com.full-suite-en/bubbles/player-threshold", String(clamped)); } catch {}
+          void setBubblePlayerThreshold(clamped);
         };
         thrInput.addEventListener("change", commit);
         thrInput.addEventListener("blur", commit);
@@ -1884,6 +2046,47 @@ const TABS: TabDef[] = [
         };
         sizeInput.addEventListener("input", commit);
         sizeInput.addEventListener("change", commit);
+      }
+      // DM-only auto-scale-text toggle. Writes scene metadata so
+      // every client picks up the new font scaling rule + auto
+      // vertical-offset behaviour.
+      const autoScaleBtn = root.querySelector<HTMLButtonElement>('button[data-key="bubblesAutoScaleText"]');
+      if (autoScaleBtn && isGM) {
+        autoScaleBtn.addEventListener("click", async () => {
+          if (autoScaleBtn.disabled) return;
+          await setBubbleAutoScaleText(!bubbleAutoScaleText);
+          if (activeTab === "bubbles") renderContent();
+        });
+      }
+      // DM-only one-shot repair: clears legacy `hide=true` from every
+      // bubble metadata blob in the current scene.
+      const repairBtn = root.querySelector<HTMLButtonElement>('button[data-key="bubblesRepairLegacyHide"]');
+      if (repairBtn && isGM) {
+        repairBtn.addEventListener("click", async () => {
+          if (repairBtn.disabled) return;
+          const lang = getLocalLang();
+          const confirmMsg = lang === "zh"
+            ? "确认修复当前场景的所有血条？\n\n这会清除每个 token 的 hide=true 标志。修复后：\n• 未上锁的 token 血条对玩家常态可见\n• 上锁的 token 仅在战斗中显示无数值剪影"
+            : "Repair all HP bars in the current scene?\n\nThis clears the hide=true flag from every token. After repair:\n• Unlocked tokens show the bar to players full-time\n• Locked tokens show a numberless silhouette only during combat";
+          if (!window.confirm(confirmMsg)) return;
+          const origText = repairBtn.textContent ?? "";
+          repairBtn.disabled = true;
+          repairBtn.textContent = lang === "zh" ? "修复中…" : "Repairing…";
+          try {
+            const { touched, total } = await repairLegacyHiddenBubbles();
+            const ok = lang === "zh"
+              ? `已修复 ${touched} 个 token（共扫描 ${total}）。`
+              : `Repaired ${touched} token${touched === 1 ? "" : "s"} (scanned ${total}).`;
+            try { await OBR.notification.show(ok, "SUCCESS"); } catch { window.alert(ok); }
+          } catch (e) {
+            console.warn("[obr-suite/settings] repair failed", e);
+            const fail = lang === "zh" ? "修复失败，请查看 DevTools 控制台。" : "Repair failed — see DevTools console.";
+            try { await OBR.notification.show(fail, "ERROR"); } catch { window.alert(fail); }
+          } finally {
+            repairBtn.disabled = false;
+            repairBtn.textContent = origText;
+          }
+        });
       }
     },
   },
@@ -2050,12 +2253,60 @@ const TABS: TabDef[] = [
       });
     },
   },
+  {
+    id: "trickster",
+    zh: `${ICONS.trickster} 捣蛋鬼在哪？`,
+    en: `${ICONS.trickster} Trickster Marker`,
+    moduleId: "trickster",
+    body: {
+      zh: `<p>左侧 tool 栏的「<b>捣蛋鬼在哪？</b>」是个隐藏触发圆——指定 token 一旦走进圆里，就自动开<b>时停</b>并把镜头聚焦它身上，做<b>伏击触发器</b> / 暗门 / 陷阱很方便。</p>
+<ul>
+  <li><b>新建</b>：选中工具，地图上拖拽画圆 → 松手即建。圆心紫色 SVG 标记，半径为触发范围</li>
+  <li>松手会弹出编辑面板：取名 / 选触发对象（所有 / 仅玩家 / 仅 NPC）/ 一次性 / 玩家可见 / 锁定。<b>取消</b>等于不创建，<b>保存</b>则提交</li>
+  <li><b>默认玩家不可见</b>：玩家完全看不到那个紫圈，DM 仍能看到半透明残影</li>
+  <li><b>仅触发一次</b>（默认开）：触发后自动锁定，玩家再走进去也不会重复触发，可在面板里"重置"重新启用</li>
+  <li><b>限制说明</b>：OBR 只在拖拽<b>松手提交</b>那一刻把新位置告诉我们，做不到"拖到一半就触发"——延迟一般 &lt; 100ms，体感跟"边走边触发"差不多</li>
+</ul>`,
+      en: `<p>The <b>Trickster Marker</b> tool on the left rail places hidden trigger circles. When a target token drag-commits into the circle, the plugin auto-fires <b>Time Stop</b> + camera focus on the entering token — perfect for <b>ambush triggers</b>, hidden traps, scripted reveals.</p>
+<ul>
+  <li><b>Create</b>: activate the tool, click-drag a circle → release to commit. Magenta SVG marker at the centre, drag distance = trigger radius</li>
+  <li>Release pops the edit panel: name / target group (all / players only / NPCs only) / one-shot / player-visible / locked. <b>Cancel</b> = don't create, <b>Save</b> = commit</li>
+  <li><b>Hidden from players by default</b>: players can't see the marker at all, DM still sees a translucent ghost</li>
+  <li><b>One-shot</b> (default on): after firing, the marker auto-locks; re-entering won't re-trigger. Use "Re-arm" in the panel to enable again</li>
+  <li><b>Caveat</b>: OBR's API only delivers a token's new position at <b>drag-commit</b> (mouse release), not mid-drag. So time stop fires the instant the player releases the drag — typically &lt; 100ms latency, feels like "fires while moving"</li>
+</ul>`,
+    },
+  },
+  {
+    id: "circleImage",
+    zh: `${ICONS.circleImage} 圆形图片`,
+    en: `${ICONS.circleImage} Circle Image`,
+    moduleId: "circleImage",
+    body: {
+      zh: `<p>左侧 tool 栏的「<b>圆形图片</b>」是个本地图片处理 + 上传到 OBR 资源库的小工具。</p>
+<p>两种模式（顶部标签切换）：</p>
+<ul>
+  <li><b>圆形裁剪</b>：拖图进去 → 拖动 = 平移、滚轮 = 缩放 → 可加自定义颜色 + 宽度的外环 → 输出方形 PNG</li>
+  <li><b>白底黑底剔除</b>：自动把纯白 / 纯黑背景变透明，容差 + 羽化两个滑块控制效果</li>
+</ul>
+<p>处理完点底部绿色"添加到资源库"按钮 → 上传到你的 OBR 资源库 → 从 OBR 资源库面板拖到场景。<b>不会出现在玩家的资源库里</b>——是你账号下的私人资源。</p>
+<p style="font-size:11px;color:#9aa0b3;margin-top:8px"><em>为什么不直接拖到场景？OBR 的 Image item 不收 data URL，本地图片只能走资源库。</em></p>`,
+      en: `<p>The <b>Circle Image / BG Remove</b> tool on the left rail is a tiny <b>local image processor that uploads to your OBR asset library</b>. Useful for circular avatars, ad-hoc tokens, or stripping white backgrounds off character portraits.</p>
+<p>Two modes (top tabs):</p>
+<ul>
+  <li><b>Circle Crop</b>: drop an image, drag = pan / scroll = zoom (or sliders), optional coloured rim ring (width 0 = no ring). Square PNG with transparent corners.</li>
+  <li><b>BG Remove</b>: zero alpha on pixels close to pure white (or pure black). Tolerance + feather sliders. Great for stripping white backings off portraits.</li>
+</ul>
+<p>Click the green <b>"Add to Library"</b> button → uploads to your OBR asset library → drag from there to your scene with OBR's normal library-drag. The asset is private to your account, not visible to players' libraries.</p>
+<p style="font-size:11px;color:#9aa0b3;margin-top:8px"><em>Why not drop straight onto the canvas? OBR's Image items don't accept data URLs in <code>image.url</code>; locally-generated images have to go through the asset library.</em></p>`,
+    },
+  },
 ];
 
 // Stable channel hides: drop tabs whose backing module is hidden
 // behind STABLE_HIDES so the user never sees the entry. Dev channel
 // keeps everything.
-const HIDDEN_TAB_IDS = new Set<string>(STABLE_HIDES ? ["search", "statusTracker"] : []);
+const HIDDEN_TAB_IDS = new Set<string>(STABLE_HIDES ? ["search", "statusTracker", "metadataInspector"] : []);
 const VISIBLE_TABS = TABS.filter((t) => !HIDDEN_TAB_IDS.has(t.id));
 
 // --- DOM refs ---
@@ -2084,6 +2335,11 @@ function moduleLabelKey(id: ModuleId): string {
     case "portals": return lang === "zh" ? "传送门" : "Portals";
     case "bubbles": return lang === "zh" ? "血量气泡" : "HP Bubbles";
     case "statusTracker": return lang === "zh" ? "状态追踪" : "Status Tracker";
+    case "hpBar": return lang === "zh" ? "小血条组件" : "HP Bar";
+    case "metadataInspector": return lang === "zh" ? "元数据检查" : "Metadata Inspector";
+    case "vision": return lang === "zh" ? "视野迷雾" : "Vision Fog";
+    case "trickster": return lang === "zh" ? "捣蛋鬼在哪？" : "Trickster Marker";
+    case "circleImage": return lang === "zh" ? "圆形图片" : "Circle Image";
   }
 }
 
@@ -2165,6 +2421,10 @@ langEnEl.addEventListener("click", () => {
 
 OBR.onReady(async () => {
   try { isGM = (await OBR.player.getRole()) === "GM"; } catch {}
+  await refreshBubbleSettings();
+  void loadSupporters().then(() => {
+    if (activeTab === "support") renderContent();
+  });
   // Install debug-overlay listener so this iframe also shows the
   // yellow tint when the user toggles the new debug-mode switch.
   try {
@@ -2172,6 +2432,15 @@ OBR.onReady(async () => {
     m.installDebugOverlay();
   } catch {}
   startSceneSync();
+  OBR.scene.onMetadataChange((meta) => {
+    const next = readBubbleThresholdFromMeta(meta as Record<string, unknown>);
+    const nextAutoScale = readBubbleAutoScaleFromMeta(meta as Record<string, unknown>);
+    if (next !== bubblePlayerThreshold || nextAutoScale !== bubbleAutoScaleText) {
+      bubblePlayerThreshold = next;
+      bubbleAutoScaleText = nextAutoScale;
+      if (activeTab === "bubbles") renderContent();
+    }
+  });
   // Re-render content (including the per-tab toggles + dynamic body) on
   // any suite state change. Language changes are handled separately so the
   // panel reflects another iframe (e.g. cluster) toggling lang.

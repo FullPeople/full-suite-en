@@ -412,20 +412,6 @@ OBR.onReady(async () => {
   });
   onLangChange(() => renderRow());
 
-  OBR.scene.onMetadataChange(() => {
-    refreshFromScene().then(async () => {
-      hasBestiaryContent = recomputeBestiaryContent();
-      hasCharacterCards = await recomputeCharacterCardsCount();
-      renderRow();
-    });
-  });
-  OBR.broadcast.onMessage("com.full-suite-en/state-changed", () => {
-    refreshFromScene().then(async () => {
-      hasBestiaryContent = recomputeBestiaryContent();
-      hasCharacterCards = await recomputeCharacterCardsCount();
-      renderRow();
-    });
-  });
   // Local-content imports / removals fire this broadcast on every
   // client. We re-check bestiary content on it so adding the FIRST
   // local file flips the popup-toggle on without a scene-metadata

@@ -453,7 +453,8 @@ export async function setupGroupSaves(): Promise<void> {
     }),
   );
   unsubs.push(
-    OBR.scene.onMetadataChange(async () => {
+    OBR.scene.onMetadataChange(async (meta) => {
+      if (!(BESTIARY_DATA_KEY in meta)) return;
       // Monster data table writes (e.g. fresh bind) — re-resolve so a
       // newly-populated row enables the popover instantly.
       try { await refresh(); } catch {}

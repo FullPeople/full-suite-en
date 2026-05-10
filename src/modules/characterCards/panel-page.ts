@@ -470,8 +470,11 @@ function render() {
   // If the currently-active card was hidden by the DM and we're a
   // player, drop the view back to empty so the iframe doesn't keep
   // a stale reference visible.
-  if (current.type === "card" && !visibleCards.find((c) => c.id === current.id)) {
-    current = { type: "empty" };
+  if (current.type === "card") {
+    const currentId = current.id;
+    if (!visibleCards.find((c) => c.id === currentId)) {
+      current = { type: "empty" };
+    }
   }
   listEl.innerHTML = "";
   if (visibleCards.length === 0) {
@@ -783,7 +786,9 @@ OBR.onReady(async () => {
 
   // Initial load + react to scene metadata changes
   await refreshFromScene();
-  OBR.scene.onMetadataChange(() => { refreshFromScene(); });
+  OBR.scene.onMetadataChange((meta) => {
+    if (SCENE_META_KEY in meta) refreshFromScene();
+  });
 
   // Validate restored activeCardId still exists; otherwise clear
   if (current.type === "card") {

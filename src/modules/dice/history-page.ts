@@ -66,137 +66,13 @@ interface HistoryEntry {
 // click on the same row sends a CLOSE broadcast.
 let activeReplayCid: string | null = null;
 
-// Per-entry transient timer. Each new entry that arrives via the
-// reveal broadcast gets a 5-second window in which its row is
-// visible with a right-to-left progress bar; when the timer fires
-// the row is removed from the visible list (data still persists in
-// `history` so the detail / "show all" views can recover it).
-const TRANSIENT_DURATION_MS = 5_000;
-interface TransientState {
-  expiresAt: number;
-  timer: number;
-}
-const transientByPlayer = new Map<string, TransientState>();
-
-// View mode — "transient" (default; only the live progress-bar rows
-// are shown, auto-close fires when empty) or "all" (manual user-open
-// shows the full history with no progress bars or auto-close).
-type ViewMode = "transient" | "all";
-let viewMode: ViewMode = (() => {
-  try {
-    const m = new URLSearchParams(location.search).get("mode");
-    if (m === "all" || m === "transient") return m;
-  } catch {}
-  return "transient";
-})();
-
-// Avoid double-firing the auto-close when timers race or the user
-// clicks the trigger at the same moment as the last transient expires.
-let autoCloseSent = false;
-
-// Broadcast to background asking it to close the popover because the
-// transient list has emptied. Background owns the popover lifecycle;
-// it'll also reset its own `historyOpen` / trigger state.
-const BC_DICE_HISTORY_AUTO_CLOSE = "com.full-suite-en/dice-history-auto-close";
-
-// Track whether at least one transient entry has appeared since
-// open — without this guard we'd send AUTO_CLOSE the moment the
-// iframe mounts (transient set is empty initially), making the
-// popover slam shut immediately on its first paint.
-let hasShownTransient = false;
-function maybeAutoClose(): void {
-  if (viewMode !== "transient") return;
-  if (!hasShownTransient) return;
-  if (transientByPlayer.size > 0) return;
-  if (detailRollerKey) return;
-  if (autoCloseSent) return;
-  autoCloseSent = true;
-  try {
-    OBR.broadcast.sendMessage(
-      BC_DICE_HISTORY_AUTO_CLOSE,
-      {},
-      { destination: "LOCAL" },
-    );
-  } catch {}
-}
-
-// Schedule the per-entry timer + progress-bar driver. The progress
-// bar's CSS uses `transform: scaleX(...)` so we don't have to hammer
-// width recomputes on every frame — just update the transform value.
-// Reset+restart when the SAME player gets a new roll inside the
-// existing window (the "freshness" of their latest roll moves the
-// expiry to now+5s instead of stacking).
-function startTransient(playerKey: string): void {
-  const prev = transientByPlayer.get(playerKey);
-  if (prev) clearTimeout(prev.timer);
-  const expiresAt = Date.now() + TRANSIENT_DURATION_MS;
-  const timer = window.setTimeout(() => {
-    transientByPlayer.delete(playerKey);
-    render();
-    maybeAutoClose();
-  }, TRANSIENT_DURATION_MS);
-  transientByPlayer.set(playerKey, { expiresAt, timer });
-  hasShownTransient = true;
-}
-
-// === Progress-bar driver =============================================
-// Single shared interval updates every visible `.row-progress-fill`'s
-// scaleX based on remaining ms / TRANSIENT_DURATION_MS. Self-stops
-// when no progress bars are visible.
-let progressInterval: number | null = null;
-function ensureProgressTimer(): void {
-  if (progressInterval != null) return;
-  const tick = () => {
-    const fills = rowsEl.querySelectorAll<HTMLDivElement>(".row-progress-fill");
-    if (!fills.length) {
-      stopProgressTimer();
-      return;
-    }
-    const now = Date.now();
-    fills.forEach((fill) => {
-      const key = fill.dataset.player ?? "";
-      const t = transientByPlayer.get(key);
-      if (!t) {
-        fill.style.transform = "scaleX(0)";
-        return;
-      }
-      const remaining = Math.max(0, t.expiresAt - now);
-      const ratio = remaining / TRANSIENT_DURATION_MS;
-      fill.style.transform = `scaleX(${ratio})`;
-    });
-  };
-  tick();
-  progressInterval = window.setInterval(tick, 100);
-}
-function stopProgressTimer(): void {
-  if (progressInterval != null) {
-    clearInterval(progressInterval);
-    progressInterval = null;
-  }
-}
-
-// === Popover auto-resize =============================================
-// Each visible row is roughly 56 px (44 px card + 4 px gap on each
-// side + 4 px outer padding). Plus 12 px outer padding for the rows
-// container. When detail view is open we use a fixed max height so
-// the user can browse comfortably.
-const ROW_PIX = 56;
-const MIN_HEIGHT = 56;
-const MAX_HEIGHT = 360;
-const POPOVER_ID_FOR_RESIZE = "com.full-suite-en/dice-history";
-function requestPopoverResize(visibleRows: number): void {
-  let h: number;
-  if (detailRollerKey) {
-    h = MAX_HEIGHT;
-  } else if (viewMode === "all") {
-    h = MAX_HEIGHT;
-  } else if (visibleRows <= 0) {
-    h = MIN_HEIGHT;
-  } else {
-    h = Math.min(MAX_HEIGHT, MIN_HEIGHT + visibleRows * ROW_PIX);
-  }
-  try { OBR.popover.setHeight(POPOVER_ID_FOR_RESIZE, h); } catch {}
-}
+// Transient mode + progress bars REMOVED 2026-05-07 (round 3): the
+// popover no longer self-dismisses on a 5-second timer. It stays open
+// until either the user clicks the X-dismiss button OR clicks a row
+// (which jumps to the dice action panel and dismisses this popover as
+// part of the same broadcast). The popover's height is now fixed by
+// the background module's `openHistory` call (HISTORY_H = 168), so
+// the per-render resize is unnecessary.
 
 // Pending entries — received via BROADCAST_DICE_ROLL but not yet
 // committed to the visible history. Each one waits for the matching
@@ -216,10 +92,7 @@ function commitPending(rollId: string): void {
   // time we commit-pending here, the entry may already be present.
   // Without this guard we'd unshift a second copy → "集体 2" of the
   // same roll, which is the duplication the user hit.
-  const playerKey = p.entry.rollerId || p.entry.rollerName || "?";
   if (history.some((h) => h.rollId === rollId)) {
-    startTransient(playerKey);
-    autoCloseSent = false;
     render();
     if (detailRollerKey) renderDetail();
     return;
@@ -227,8 +100,6 @@ function commitPending(rollId: string): void {
   history.unshift(p.entry);
   if (history.length > HISTORY_CAP) history.length = HISTORY_CAP;
   saveHistory();
-  startTransient(playerKey);
-  autoCloseSent = false;
   render();
   if (detailRollerKey) {
     const k = p.entry.rollerId || p.entry.rollerName || "?";
@@ -466,19 +337,12 @@ function latestPerPlayer(): GroupedRow[] {
 }
 
 function render(): void {
-  let rows = latestPerPlayer();
-  if (viewMode === "transient") {
-    // Only show players whose latest roll is still within its 5s
-    // window. The detail / "show all" view is unaffected.
-    rows = rows.filter((g) => {
-      const k = g.head.rollerId || g.head.rollerName || "?";
-      return transientByPlayer.has(k);
-    });
-  }
+  const rows = latestPerPlayer();
   if (!rows.length) {
     rowsEl.innerHTML = `<div class="empty">${tt("diceHistEmpty")}</div>`;
     if (headHint) headHint.textContent = "";
-    requestPopoverResize(0);
+    const boxEl = document.querySelector<HTMLElement>(".box");
+    if (boxEl) boxEl.classList.remove("has-rows");
     return;
   }
   if (headHint) headHint.textContent = lang === "zh" ? `${rows.length} 位` : `${rows.length}`;
@@ -505,16 +369,11 @@ function render(): void {
       : isRepeat
       ? buildRepeatStripHtml(h, "flow")
       : `<div class="formula">${buildFormula(h)}</div>`;
-    // Progress bar — only attached in transient mode. Width is
-    // animated via JS-driven scaleX (set in the post-render pass
-    // below) so the bar actually depletes over the 5-second window.
+    // Progress bar removed (no transient auto-dismiss).
     const playerKey = h.rollerId || h.rollerName || "?";
-    const progressMarkup = viewMode === "transient" && transientByPlayer.has(playerKey)
-      ? `<div class="row-progress"><div class="row-progress-fill" data-player="${escapeHtml(playerKey)}"></div></div>`
-      : "";
+    const cid = g.cid;
     return `
-      <div class="${rowCls.join(" ")}" data-roller="${escapeHtml(h.rollerName)}" data-rollerid="${escapeHtml(h.rollerId)}" data-player="${escapeHtml(playerKey)}">
-        ${progressMarkup}
+      <div class="${rowCls.join(" ")}" data-roller="${escapeHtml(h.rollerName)}" data-rollerid="${escapeHtml(h.rollerId)}" data-player="${escapeHtml(playerKey)}" data-cid="${escapeHtml(cid)}">
         <div class="swatch" style="--player-color:${h.rollerColor}"></div>
         <div class="body">
           <div class="line1">
@@ -530,20 +389,51 @@ function render(): void {
   rowsEl.querySelectorAll<HTMLDivElement>(".row").forEach((row) => {
     row.addEventListener("click", () => {
       const playerName = row.dataset.roller ?? "";
-      const rollerId = row.dataset.rollerid ?? "";
-      // Slide in the detail view for this player. The replay overlay
-      // is triggered later — only by clicking a SPECIFIC entry inside
-      // the detail view (not by clicking the player row itself).
-      openDetail(rollerId || playerName, playerName);
+      const cid = row.dataset.cid ?? "";
+      // New behaviour (per user spec): click a row → open the dice
+      // action panel jumped to History tab (filter by this player) +
+      // activate the replay overlay for this roll's collective. The
+      // bottom-right history popover dismisses itself afterwards so
+      // the user can focus on the panel without two UIs fighting for
+      // attention.
+      try {
+        if (playerName) {
+          OBR.broadcast.sendMessage(
+            "com.full-suite-en/dice-history-filter",
+            { playerName },
+            { destination: "LOCAL" },
+          );
+        }
+        OBR.broadcast.sendMessage(
+          "com.full-suite-en/dice-panel-toggle",
+          { open: true },
+          { destination: "LOCAL" },
+        );
+        if (cid) {
+          OBR.broadcast.sendMessage(
+            BC_DICE_REPLAY,
+            { cid, action: "toggle" },
+            { destination: "LOCAL" },
+          );
+          OBR.broadcast.sendMessage(
+            BC_DICE_REPLAY,
+            { cid, action: "toggle" },
+            { destination: "REMOTE" },
+          );
+        }
+        OBR.broadcast.sendMessage(
+          "com.full-suite-en/dice-history-dismiss",
+          {},
+          { destination: "LOCAL" },
+        );
+      } catch {}
     });
   });
 
-  // Drive every visible progress bar with a single 100ms interval
-  // (cheaper than a per-row rAF loop). Each call sets each bar's
-  // remaining transform based on its player's `expiresAt`.
-  if (viewMode === "transient") ensureProgressTimer();
-  // Auto-fit popover height to the visible row count.
-  requestPopoverResize(rows.length);
+  // Toggle the .has-rows flag on the .box wrapper so the X dismiss
+  // button shows/hides with the row list.
+  const boxEl = document.querySelector<HTMLElement>(".box");
+  if (boxEl) boxEl.classList.toggle("has-rows", rows.length > 0);
 }
 
 // Camera-focus the local viewport on the involved tokens. Single
@@ -600,9 +490,8 @@ function openDetail(rollerKey: string, _playerName: string): void {
   detailEl.classList.add("on");
   rowsEl.classList.add("shifted");
   detailList.scrollTop = 0;
-  // Detail view always uses max popover height so the user can scroll
-  // through the player's entire history without resizing.
-  requestPopoverResize(0);
+  // Popover height is now fixed by the background module; no
+  // per-render resize.
 }
 
 function closeDetail(): void {
@@ -613,10 +502,7 @@ function closeDetail(): void {
   rowsEl.classList.remove("shifted");
   setTimeout(() => {
     detailRollerKey = null;
-    // Re-render to reapply the transient/all filter, and re-fit
-    // the popover to the new visible row count.
     render();
-    maybeAutoClose();
   }, 350);
 }
 
@@ -909,39 +795,9 @@ OBR.onReady(async () => {
     }
   });
 
-  // Mount-time recovery: the iframe may have been (re)mounted by the
-  // auto-open path AFTER the BROADCAST_DICE_ROLL / BC_DICE_HISTORY_REVEAL
-  // pair already fired. Without this, the row that triggered the
-  // auto-open would never appear (transient set is empty until a
-  // future broadcast lands). Scan history for entries newer than the
-  // transient window, arm a transient timer per player so their row
-  // is immediately visible. Also handles the user's "再次投掷不触发"
-  // bug — every fresh open seeds transient state from the latest
-  // localStorage state, regardless of any prior expired-out players.
-  const RECENT_WINDOW_MS = TRANSIENT_DURATION_MS;
-  const seenAtMount = new Set<string>();
-  const now = Date.now();
-  for (const h of history) {
-    const playerKey = h.rollerId || h.rollerName || "?";
-    if (seenAtMount.has(playerKey)) continue;
-    seenAtMount.add(playerKey);
-    if (now - h.ts <= RECENT_WINDOW_MS) {
-      // Use the entry's actual age so the bar starts already partially
-      // depleted instead of resetting to a fresh 5s every reopen.
-      const remaining = Math.max(0, RECENT_WINDOW_MS - (now - h.ts));
-      if (remaining > 0) {
-        const expiresAt = now + remaining;
-        const timer = window.setTimeout(() => {
-          transientByPlayer.delete(playerKey);
-          render();
-          maybeAutoClose();
-        }, remaining);
-        transientByPlayer.set(playerKey, { expiresAt, timer });
-        hasShownTransient = true;
-      }
-    }
-  }
-
+  // Mount-time: just paint the current history. There's no transient
+  // window to seed any more — the popover stays open until the user
+  // clicks the X-dismiss button or clicks a row.
   applyI18nDom(lang);
   render();
 });
@@ -961,30 +817,9 @@ setInterval(() => {
 }, 30_000);
 
 // Cross-tab refresh: when the dice-panel modifies localStorage (e.g.
-// clearing history), update this view too. Also a safety net for the
-// "every new roll triggers progress + row entrance" guarantee — if
-// BROADCAST_DICE_ROLL somehow misses our listener (popover unmounting
-// race, browser throttling), the LS update from dice-panel's eager
-// save still reaches us via this event and we can arm a transient
-// timer for any newly-arrived entry whose player isn't already live.
+// clearing history), update this view too.
 window.addEventListener("storage", (e) => {
   if (e.key !== LS_HISTORY) return;
-  const next = loadHistory();
-  // Detect newly-arrived rollIds (in `next` but not in current).
-  const known = new Set(history.map((h) => h.rollId));
-  const fresh: HistoryEntry[] = [];
-  for (const h of next) {
-    if (!known.has(h.rollId)) fresh.push(h);
-  }
-  history = next;
-  // For each fresh entry, re-arm its player's transient timer so a
-  // new roll always restarts the 5s window even if the player's
-  // previous row had already expired.
-  const now = Date.now();
-  for (const h of fresh) {
-    if (now - h.ts > TRANSIENT_DURATION_MS) continue;
-    startTransient(h.rollerId || h.rollerName || "?");
-    autoCloseSent = false;
-  }
+  history = loadHistory();
   render();
 });

@@ -23,11 +23,12 @@ export function itemToInitiativeItem(item: Item): InitiativeItem | null {
   if (!data) return null;
   const modKey = "com.initiative-tracker/dexMod";
   const mod = typeof item.metadata[modKey] === "number" ? item.metadata[modKey] as number : 0;
-  // Pull HP fields from the shared bubbles-extension metadata namespace
-  // so the panel can render a small numberless HP track above each
-  // count chip without standing up an independent data source.
-  const BUBBLES_KEY = "com.owlbear-rodeo-bubbles-extension/metadata";
-  const bm = (item.metadata as any)?.[BUBBLES_KEY];
+  // Pull HP fields from the suite-owned bubbles namespace, falling back
+  // to the upstream "Stat Bubbles for D&D" key so unmigrated scenes
+  // keep rendering the HP track above each count chip.
+  const BUBBLES_KEY = "com.full-suite-en/bubbles/data";
+  const EXTERNAL_BUBBLES_KEY = "com.owlbear-rodeo-bubbles-extension/metadata";
+  const bm = (item.metadata as any)?.[BUBBLES_KEY] ?? (item.metadata as any)?.[EXTERNAL_BUBBLES_KEY];
   let hp = -1;
   let maxHp = -1;
   let bubblesLocked = true;

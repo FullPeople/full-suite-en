@@ -1,4 +1,5 @@
 import OBR from "@owlbear-rodeo/sdk";
+import { STABLE_HIDES } from "./feature-flags";
 
 // Shared state across the suite. Three layers:
 //
@@ -29,7 +30,9 @@ export type ModuleId =
   | "statusTracker"
   | "hpBar"
   | "metadataInspector"
-  | "vision";
+  | "vision"
+  | "trickster"
+  | "circleImage";
 
 export type DataVersion = "2014" | "2024" | "all";
 export type Language = "zh" | "en";
@@ -71,6 +74,10 @@ export interface SuiteState {
   // fog before revealing. When false, spawned tokens are immediately
   // visible to all players. Default true (matches legacy behavior).
   bestiaryAutoHide: boolean;
+  // When true, the spawned token's OBR-native plainText label is set
+  // to the monster's name automatically. When false, the token spawns
+  // label-less. Default false (legacy behaviour).
+  bestiaryAutoName: boolean;
   // Initiative tracker — focus the active token's owner camera onto
   // the next character whenever the turn advances. Default true.
   initiativeFocusOnTurnChange: boolean;
@@ -111,32 +118,40 @@ export const DEFAULT_STATE: SuiteState = {
     dice: true,
     portals: true,
     bubbles: true,
-    // Default OFF — status tracker is in active development (调试中).
-    // Each scene starts with it disabled; the user has to flip it
-    // on in Settings → 状态追踪 every scene reload until it ships
-    // as stable.
-    // Status tracker — promoted out of beta 2026-05-04. Default ON.
-    statusTracker: true,
+    // Status tracker — promoted out of beta 2026-05-04. Default ON for dev,
+    // disabled when STABLE_HIDES is true.
+    // The right-click pill on the Select tool + the new toolbar tool
+    // both work for everyone (no role gate); per-token buff metadata
+    // is enforced by OBR's normal item-edit permissions.
+    statusTracker: !STABLE_HIDES,
     // HP bar component — standalone draggable HP/Temp/AC popover
     // that auto-shows on selection of "lightweight" tokens (no
     // bestiary binding, no character-card binding). Right-click
     // menu adds / removes the per-token flag. Default ON.
     hpBar: true,
-    // DM-only inspection tool. Default OFF — most users never need
-    // it; only enable when you specifically want to peek at what
+    // DM-only inspection tool. Default OFF — disabled when STABLE_HIDES
+    // is true. Enable only when you specifically want to peek at what
     // plugins have stamped onto a token / scene / room. The tool
     // icon in the OBR sidebar only shows when this is enabled.
-    metadataInspector: false,
+    metadataInspector: !STABLE_HIDES,
     // Vision / fog plugin — light sources on tokens, raycast against
     // walls, per-client fog mask. Default OFF because it's heavy
     // (continuous raycast on token movement) and will conflict
     // visually with OBR's own fog drawings if both are in use.
     vision: false,
+    // Trickster — DM-placed circular trigger zone. When a target
+    // token drag-commits into the zone, fires a one-shot time stop
+    // + camera focus on the entering token. Default ON.
+    trickster: true,
+    // Circle-image — toolbar tool for circular crop / BG removal,
+    // upload to OBR asset library. Default ON.
+    circleImage: true,
   },
   dataVersion: "2024",
   allowPlayerMonsters: false,
   bestiaryAutoInitiative: true,
   bestiaryAutoHide: true,
+  bestiaryAutoName: false,
   initiativeFocusOnTurnChange: true,
   initiativeAutoSnapOnPrep: false,
   crossSceneSyncSettings: false,
@@ -189,6 +204,8 @@ function merge(partial: any): SuiteState {
       partial.bestiaryAutoInitiative ?? DEFAULT_STATE.bestiaryAutoInitiative,
     bestiaryAutoHide:
       partial.bestiaryAutoHide ?? DEFAULT_STATE.bestiaryAutoHide,
+    bestiaryAutoName:
+      partial.bestiaryAutoName ?? DEFAULT_STATE.bestiaryAutoName,
     initiativeFocusOnTurnChange:
       partial.initiativeFocusOnTurnChange ?? DEFAULT_STATE.initiativeFocusOnTurnChange,
     initiativeAutoSnapOnPrep:
@@ -206,6 +223,7 @@ function suiteStateEqual(a: SuiteState, b: SuiteState): boolean {
   if (a.allowPlayerMonsters !== b.allowPlayerMonsters) return false;
   if (a.bestiaryAutoInitiative !== b.bestiaryAutoInitiative) return false;
   if (a.bestiaryAutoHide !== b.bestiaryAutoHide) return false;
+  if (a.bestiaryAutoName !== b.bestiaryAutoName) return false;
   if (a.initiativeFocusOnTurnChange !== b.initiativeFocusOnTurnChange) return false;
   if (a.initiativeAutoSnapOnPrep !== b.initiativeAutoSnapOnPrep) return false;
   if (a.crossSceneSyncSettings !== b.crossSceneSyncSettings) return false;
@@ -297,7 +315,11 @@ export async function setState(partial: Partial<SuiteState>): Promise<void> {
     ...partial,
     enabled: { ...cached.enabled, ...(partial.enabled ?? {}) },
   };
+
+  if (suiteStateEqual(prev, next)) return;
+
   await OBR.scene.setMetadata({ [SCENE_KEY]: next });
+  lastSceneStateJson = JSON.stringify(next);
   cached = next;
 
   // Cross-scene sync mirror: write to room when ON, clear when
@@ -306,9 +328,11 @@ export async function setState(partial: Partial<SuiteState>): Promise<void> {
   try {
     if (next.crossSceneSyncSettings) {
       await OBR.room.setMetadata({ [ROOM_STATE_KEY]: next });
+      lastRoomStateJson = JSON.stringify(next);
     } else if (prev.crossSceneSyncSettings) {
       // Was on, now off — clear so scene-loads stop seeing it.
       await OBR.room.setMetadata({ [ROOM_STATE_KEY]: undefined });
+      lastRoomStateJson = JSON.stringify(null);
     }
   } catch (e) {
     console.warn("[obr-suite/state] room mirror write failed", e);
@@ -341,9 +365,29 @@ export function writeLS(key: string, val: string) {
 }
 
 // Subscribe scene metadata changes — call once per iframe.
+let sceneSyncStarted = false;
+let lastSceneStateJson = "";
+let lastRoomStateJson = "";
 export function startSceneSync() {
-  refreshFromScene();
-  OBR.scene.onMetadataChange(() => refreshFromScene());
+  if (sceneSyncStarted) return;
+  sceneSyncStarted = true;
+  void refreshFromScene().then((s) => {
+    lastSceneStateJson = JSON.stringify(s);
+  });
+  OBR.scene.onMetadataChange((meta) => {
+    if (!meta || !(SCENE_KEY in meta)) return;
+    const nextJson = JSON.stringify(meta[SCENE_KEY] ?? null);
+    if (nextJson === lastSceneStateJson) return;
+    lastSceneStateJson = nextJson;
+    void refreshFromScene();
+  });
+  OBR.room.onMetadataChange((meta) => {
+    if (!meta || !(ROOM_STATE_KEY in meta)) return;
+    const nextJson = JSON.stringify(meta[ROOM_STATE_KEY] ?? null);
+    if (nextJson === lastRoomStateJson) return;
+    lastRoomStateJson = nextJson;
+    void refreshFromScene();
+  });
 }
 
 // --- Per-client language (localStorage) ---
